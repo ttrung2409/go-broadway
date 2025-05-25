@@ -3,17 +3,19 @@ package broadway
 import "sync"
 
 type request struct {
-	Demand   int
-	Response chan []*Message
-	closed   bool
-	mu       sync.Mutex
+	Demand             int
+	Response           chan []*Message
+	MessageProcessorId string
+	closed             bool
+	mu                 sync.Mutex
 }
 
-func newRequest(demand int) *request {
+func newRequest(messageProcessorId string, demand int) *request {
 	return &request{
-		Demand:   demand,
-		Response: make(chan []*Message),
-		mu:       sync.Mutex{},
+		Demand:             demand,
+		Response:           make(chan []*Message),
+		MessageProcessorId: messageProcessorId,
+		mu:                 sync.Mutex{},
 	}
 }
 

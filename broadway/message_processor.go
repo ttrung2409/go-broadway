@@ -13,14 +13,30 @@ import (
 const defaultMinDemand = 5
 const defaultMaxDemand = 10
 
+// MessageProcessorConfig defines the configuration for message processors
+// that handle individual messages in the Broadway pipeline.
 type MessageProcessorConfig struct {
-	Concurrency int
-	Processor   MessageProcessor
-	MinDemand   int
-	MaxDemand   int
+	Concurrency int              // Number of concurrent message processor workers (default: 1)
+	Processor   MessageProcessor // The processor implementation that processes messages
+	MinDemand   int              // Minimum number of messages to request from producers (default: 5)
+	MaxDemand   int              // Maximum number of messages to request from producers (default: 10)
 }
 
+// MessageProcessor is the interface that must be implemented by components
+// that process individual messages. It defines a single method for handling
+// individual messages with a context.
 type MessageProcessor interface {
+	// Handle processes a single message and returns the processed message
+	// along with any error that occurred during processing. The implementation
+	// should be safe for concurrent use.
+	//
+	// Parameters:
+	//   - message: The message to process.
+	//   - ctx: The context for the processing operation. Can be used to handle timeouts or cancellation.
+	//
+	// Returns:
+	//   - The processed message, or nil if the message should be discarded.
+	//   - An error if processing failed, or nil if successful.
 	Handle(message *Message, ctx context.Context) (*Message, error)
 }
 
@@ -61,6 +77,17 @@ func newMessageProcessor(
 	}
 }
 
+// Run starts the message processor with the provided context.
+// It processes messages from producers and forwards them to batchers.
+// Returns a channel that will receive a value when the processor terminates,
+// either due to context cancellation or an error.
+//
+// Parameters:
+//   - ctx: The context that controls the lifecycle of the processor. When cancelled,
+//     the processor will shut down gracefully.
+//
+// Returns:
+//   - A channel that will receive a value (possibly an error) when the processor terminates.
 func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 
 	onTerminated := make(chan any)
@@ -108,6 +135,9 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 	return onTerminated
 }
 
+// Terminate stops the message processor and releases all resources.
+// After calling Terminate, the processor will no longer process new messages.
+// This method is thread-safe and idempotent.
 func (p *messageProcessor) Terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -179,7 +209,7 @@ func (p *messageProcessor) request() {
 			}
 		}
 
-		r := newRequest(demand)
+		r := newRequest(p.Id, demand)
 		p.pendingRequests[producerId] = r
 
 		if ok := producer.Send(r); !ok {
@@ -210,6 +240,13 @@ func (p *messageProcessor) concurrentBatchers() map[string]*batcher {
 	return p.batchers
 }
 
+// SetProducers updates the message processor's producers map.
+// This is used to dynamically change the producers that the message processor
+// pulls messages from. This method is thread-safe.
+//
+// Parameters:
+//   - producers: A map of producer IDs to producer instances that this processor
+//     will request messages from.
 func (p *messageProcessor) SetProducers(producers map[string]*producer) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -217,9 +254,25 @@ func (p *messageProcessor) SetProducers(producers map[string]*producer) {
 	p.producers = producers
 }
 
+// SetBatchers updates the message processor's batchers map.
+// This is used to dynamically change the batchers that the message processor
+// sends processed messages to. This method is thread-safe.
+//
+// Parameters:
+//   - batchers: A map of batcher names to batcher instances that this processor
+//     will send processed messages to.
 func (p *messageProcessor) SetBatchers(batchers map[string]*batcher) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.batchers = batchers
+}
+
+// ToString returns a string representation of this message processor.
+// This method is used by the hash ring for consistent hashing.
+//
+// Returns:
+//   - The unique ID of the message processor.
+func (p *messageProcessor) ToString() string {
+	return p.Id
 }
