@@ -30,12 +30,12 @@ type BatcherConfig struct {
 // When partitioning is enabled, messages with the same partition key will
 // be consistently routed to the same batch processor.
 type batcher struct {
-	config     BatcherConfig                         // Configuration for this batcher
-	messages   map[string]*concurrentQueue[*Message] // Map of batch key to message queue
-	hr         *hashRing[*batchProcessor]            // Hash ring for routing batches to processors
-	receiver   chan []*Message                       // Channel for receiving new messages
-	terminated bool                                  // Flag indicating whether the batcher is terminated
-	mu         sync.Mutex                            // Mutex for thread-safe operations
+	config     BatcherConfig                                      // Configuration for this batcher
+	messages   *concurrentMap[string, *concurrentQueue[*Message]] // Map of batch key to message queue
+	hr         *hashRing[*batchProcessor]                         // Hash ring for routing batches to processors
+	receiver   chan []*Message                                    // Channel for receiving new messages
+	terminated bool                                               // Flag indicating whether the batcher is terminated
+	mu         sync.Mutex                                         // Mutex for thread-safe operations
 }
 
 func newBatcher(config BatcherConfig) *batcher {
@@ -53,7 +53,7 @@ func newBatcher(config BatcherConfig) *batcher {
 
 	return &batcher{
 		config:   config,
-		messages: make(map[string]*concurrentQueue[*Message]),
+		messages: newConcurrentMap[string, *concurrentQueue[*Message]](),
 		hr:       newHashRing[*batchProcessor](),
 		receiver: make(chan []*Message),
 		mu:       sync.Mutex{},
@@ -77,9 +77,9 @@ func (b *batcher) Run(ctx context.Context) <-chan any {
 		b.hr.AddNode(processor)
 
 		go func(processor *batchProcessor, onTerminated <-chan any) {
-			err := <-onTerminated
+			err, ok := <-onTerminated
 
-			if err != nil {
+			if ok && err != nil {
 				b.handleProcessorPanic(processor, ctx)
 			}
 		}(processor, onTerminated)
@@ -90,7 +90,7 @@ func (b *batcher) Run(ctx context.Context) <-chan any {
 			r := recover()
 
 			if r != nil {
-				fmt.Println("batcher panicked:", r)
+				fmt.Printf("batcher panicked: %v\n", r)
 				b.Terminate()
 			} else {
 				b.flush()
@@ -107,16 +107,17 @@ func (b *batcher) Run(ctx context.Context) <-chan any {
 
 		for messages := range b.receiver {
 			for _, message := range messages {
-				if _, ok := b.messages[message.BatchKey]; !ok {
-					b.messages[message.BatchKey] = newConcurrentQueue[*Message]()
+				if _, ok := b.messages.Get(message.BatchKey); !ok {
+					b.messages.Set(message.BatchKey, newConcurrentQueue[*Message]())
 				}
 
-				b.messages[message.BatchKey].Enqueue(message)
+				batch, _ := b.messages.Get(message.BatchKey)
+				batch.Enqueue(message)
 			}
 		}
 	}()
 
-	go b.processBatches(ctx)
+	go b.processBatches()
 
 	return onTerminated
 }
@@ -165,22 +166,24 @@ func (b *batcher) Send(messages []*Message) bool {
 func (b *batcher) flush() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println("batcher panicked:", r)
+			fmt.Printf("batcher panicked: %v\n", r)
 		}
 	}()
 
 	for {
-		for batchKey, messages := range b.messages {
+		b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
 			if batch, ok := messages.DequeueAll(); ok {
 				if b.processBatch(batchKey, batch) {
-					delete(b.messages, batchKey)
+					b.messages.Delete(batchKey)
 				} else {
 					messages.Prepend(batch...)
 				}
 			}
-		}
 
-		if len(b.messages) == 0 {
+			return true
+		})
+
+		if b.messages.Len() == 0 {
 			return
 		}
 
@@ -196,35 +199,49 @@ func (b *batcher) flush() {
 // The method balances efficiency (by waiting for full batches) with timely processing
 // (by processing partial batches after a timeout). If a batch cannot be processed
 // successfully, the messages are put back in the queue to be retried later.
-func (b *batcher) processBatches(ctx context.Context) {
+func (b *batcher) processBatches() {
+	ticker := time.NewTicker(b.config.BatchTimeout)
+	defer ticker.Stop()
+
 	for {
 		if b.terminated {
 			return
 		}
 
 		select {
-		case <-time.After(b.config.BatchTimeout):
-			// Process all batches that have been waiting for the timeout period
-			for batchKey, messages := range b.messages {
-				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
-					if !b.processBatch(batchKey, batch) {
-						messages.Prepend(batch...)
+		case <-ticker.C:
+			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
+				if messages.Len() > 0 {
+					if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
+						if !b.processBatch(batchKey, batch) {
+							messages.Prepend(batch...)
+						}
 					}
 				}
-			}
+
+				return true
+			})
 
 		default:
-			// Process any batches that have reached the batch size threshold
-			for batchKey, messages := range b.messages {
+			// Check for any batches that have reached the batch size threshold
+			hasBatchesReachedThreshold := false
+			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
 				if messages.Len() < b.config.BatchSize {
-					continue
+					return true
 				}
 
+				hasBatchesReachedThreshold = true
 				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
 					if !b.processBatch(batchKey, batch) {
 						messages.Prepend(batch...)
 					}
 				}
+
+				return true
+			})
+
+			if !hasBatchesReachedThreshold {
+				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}
@@ -242,7 +259,6 @@ func (b *batcher) processBatches(ctx context.Context) {
 // Returns:
 //   - true if the batch was successfully sent to a processor, false otherwise
 func (b *batcher) processBatch(batchKey string, batch []*Message) bool {
-
 	if processor, ok := b.hr.GetNode(batchKey); ok {
 		return processor.Send(batch)
 	}
@@ -268,34 +284,27 @@ func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Co
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Remove the failed processor from the hash ring
 	b.hr.RemoveNode(processor)
 
-	// Create and start a new processor
 	newProcessor := newBatchProcessor(b.config.Processor)
 	onTerminated := newProcessor.Run(ctx)
 
-	// Find the processor that will share hash space with the new one
 	keySharingProcessor, _ := b.hr.GetNextNode(newProcessor)
 
-	// Pause the affected processor during the transition if one exists
 	if keySharingProcessor != nil {
 		keySharingProcessor.Pause()
 	}
 
-	// Add the new processor to the hash ring
 	b.hr.AddNode(newProcessor)
 
-	// Resume the affected processor
 	if keySharingProcessor != nil {
 		keySharingProcessor.Resume()
 	}
 
-	// Monitor the new processor for failures
 	go func(processor *batchProcessor, onTerminated <-chan any) {
-		err := <-onTerminated
+		err, ok := <-onTerminated
 
-		if err != nil {
+		if ok && err != nil {
 			b.handleProcessorPanic(processor, ctx)
 		}
 	}(newProcessor, onTerminated)

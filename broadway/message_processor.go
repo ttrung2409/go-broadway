@@ -26,6 +26,8 @@ type MessageProcessorConfig struct {
 // that process individual messages. It defines a single method for handling
 // individual messages with a context.
 type MessageProcessor interface {
+	New() MessageProcessor
+
 	// Handle processes a single message and returns the processed message
 	// along with any error that occurred during processing. The implementation
 	// should be safe for concurrent use.
@@ -42,10 +44,11 @@ type MessageProcessor interface {
 
 type messageProcessor struct {
 	MessageProcessor
-	Id              string
+	Id string
+
 	config          MessageProcessorConfig
 	messages        *concurrentQueue[*Message]
-	pendingRequests map[string]*request
+	pendingRequests *concurrentMap[string, *request]
 	producers       map[string]*producer
 	batchers        map[string]*batcher
 	terminated      bool
@@ -67,10 +70,10 @@ func newMessageProcessor(
 
 	return &messageProcessor{
 		Id:               uuid.New().String(),
-		MessageProcessor: config.Processor,
+		MessageProcessor: config.Processor.New(),
 		config:           config,
 		messages:         newConcurrentQueue[*Message](),
-		pendingRequests:  make(map[string]*request),
+		pendingRequests:  newConcurrentMap[string, *request](),
 		mu:               sync.RWMutex{},
 		producers:        producers,
 		batchers:         batchers,
@@ -97,15 +100,17 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 			r := recover()
 
 			if r != nil {
-				fmt.Println("message processor panicked:", r)
+				fmt.Printf("message processor panicked: %v\n", r)
 				p.Terminate()
 			} else {
 				p.flush(ctx)
 			}
 
-			for _, request := range p.pendingRequests {
+			p.pendingRequests.ForEach(func(_ string, request *request) bool {
 				request.Close()
-			}
+
+				return true
+			})
 
 			onTerminated <- r
 			close(onTerminated)
@@ -137,7 +142,6 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 
 // Terminate stops the message processor and releases all resources.
 // After calling Terminate, the processor will no longer process new messages.
-// This method is thread-safe and idempotent.
 func (p *messageProcessor) Terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -152,7 +156,7 @@ func (p *messageProcessor) Terminate() {
 func (p *messageProcessor) flush(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println("message processor panicked:", r)
+			fmt.Printf("message processor panicked: %v\n", r)
 		}
 	}()
 
@@ -177,20 +181,24 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 			processedMessage.BatchKey = defaultBatchKey
 		}
 
-		if p.concurrentBatchers() == nil && processedMessage.Acknowledger != nil {
-			processedMessage.Acknowledger.Ack([]*Message{processedMessage}, err)
+		if processedMessage.PartitionKey() != "" {
+			processedMessage.BatchKey = processedMessage.PartitionKey()
+		}
+
+		if (p.batchers == nil || err != nil) && processedMessage.Ack() != nil {
+			processedMessage.Ack()([]*Message{processedMessage}, err)
 		}
 
 		return processedMessage
 	})
 
-	if p.concurrentBatchers() != nil {
+	if p.batchers != nil {
 		messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
 			return message.Batcher
 		})
 
 		for batcherName, messagesInBatcher := range messagesByBatchers {
-			if batcher, ok := p.concurrentBatchers()[batcherName]; ok {
+			if batcher, ok := p.batchers[batcherName]; ok {
 				batcher.Send(messagesInBatcher)
 			}
 		}
@@ -198,73 +206,43 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 }
 
 func (p *messageProcessor) request() {
+
 	demand := p.config.MaxDemand - p.config.MinDemand
 
-	for producerId, producer := range p.concurrentProducers() {
-		if r, ok := p.pendingRequests[producerId]; ok {
-			if r.Closed() {
-				delete(p.pendingRequests, producerId)
+	for producerId, producer := range p.producers {
+		if r, ok := p.pendingRequests.Get(producerId); ok {
+			if r.IsClosed() {
+				p.pendingRequests.Delete(producerId)
 			} else {
 				continue
 			}
 		}
 
+		fmt.Printf("requesting %d messages \n", demand)
+
 		r := newRequest(p.Id, demand)
-		p.pendingRequests[producerId] = r
 
 		if ok := producer.Send(r); !ok {
 			continue
 		}
 
-		go func(r *request) {
+		p.pendingRequests.Set(producerId, r)
+
+		go func(r *request, producerId string) {
 			for messages := range r.Response {
 				p.messages.Enqueue(messages...)
 			}
 
-			delete(p.pendingRequests, producerId)
-		}(r)
+			p.pendingRequests.Delete(producerId)
+		}(r, producerId)
 	}
 }
 
-func (p *messageProcessor) concurrentProducers() map[string]*producer {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	return p.producers
-}
-
-func (p *messageProcessor) concurrentBatchers() map[string]*batcher {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	return p.batchers
-}
-
-// SetProducers updates the message processor's producers map.
-// This is used to dynamically change the producers that the message processor
-// pulls messages from. This method is thread-safe.
-//
-// Parameters:
-//   - producers: A map of producer IDs to producer instances that this processor
-//     will request messages from.
 func (p *messageProcessor) SetProducers(producers map[string]*producer) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.producers = producers
 }
 
-// SetBatchers updates the message processor's batchers map.
-// This is used to dynamically change the batchers that the message processor
-// sends processed messages to. This method is thread-safe.
-//
-// Parameters:
-//   - batchers: A map of batcher names to batcher instances that this processor
-//     will send processed messages to.
 func (p *messageProcessor) SetBatchers(batchers map[string]*batcher) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.batchers = batchers
 }
 

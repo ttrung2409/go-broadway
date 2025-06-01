@@ -6,8 +6,9 @@ type request struct {
 	Demand             int
 	Response           chan []*Message
 	MessageProcessorId string
-	closed             bool
-	mu                 sync.Mutex
+
+	closed bool
+	mu     sync.Mutex
 }
 
 func newRequest(messageProcessorId string, demand int) *request {
@@ -19,7 +20,7 @@ func newRequest(messageProcessorId string, demand int) *request {
 	}
 }
 
-func (r *request) Closed() bool {
+func (r *request) IsClosed() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closed
@@ -37,7 +38,7 @@ func (r *request) Close() {
 	close(r.Response)
 }
 
-func (r *request) Send(messages []*Message) bool {
+func (r *request) Reply(messages []*Message) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

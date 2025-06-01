@@ -42,9 +42,9 @@ func (s *batcherSupervisor) Run(
 		onTerminated := b.Run(ctx)
 
 		go func(b *batcher, onTerminated <-chan any) {
-			err := <-onTerminated
+			err, ok := <-onTerminated
 
-			if err != nil {
+			if ok && err != nil {
 				s.handleBatcherPanic(b, ctx)
 			}
 		}(b, onTerminated)
@@ -69,9 +69,9 @@ func (s *batcherSupervisor) handleBatcherPanic(b *batcher, ctx context.Context) 
 	onTerminated := newBatcher.Run(ctx)
 
 	go func(newBatcher *batcher, onTerminated <-chan any) {
-		err := <-onTerminated
+		err, ok := <-onTerminated
 
-		if err != nil {
+		if ok && err != nil {
 			s.handleBatcherPanic(newBatcher, ctx)
 		}
 	}(newBatcher, onTerminated)

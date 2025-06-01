@@ -8,16 +8,19 @@ type producerSupervisor struct {
 	config                   ProducerConfig
 	producers                map[string]*producer
 	messageProcessorResolver messageProcessorResolver
+	messageAck               Acknowledger
 	onProducersChange        chan map[string]*producer
 }
 
 // newProducerSupervisor creates a new producer supervisor with the given configuration.
 // It initializes empty maps and channels that will be populated when Run is called.
-func newProducerSupervisor(config ProducerConfig, messageProcessorResolver messageProcessorResolver) *producerSupervisor {
+func newProducerSupervisor(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producerSupervisor {
 	return &producerSupervisor{
-		config:            config,
-		producers:         make(map[string]*producer),
-		onProducersChange: make(chan map[string]*producer),
+		config:                   config,
+		producers:                make(map[string]*producer),
+		messageProcessorResolver: messageProcessorResolver,
+		messageAck:               messageAck,
+		onProducersChange:        make(chan map[string]*producer),
 	}
 }
 
@@ -37,14 +40,14 @@ func (s *producerSupervisor) Run(
 ) (map[string]*producer, <-chan map[string]*producer) {
 
 	for i := 0; i < s.config.Concurrency; i++ {
-		p := newProducer(s.config, s.messageProcessorResolver)
+		p := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
 		s.producers[p.Id] = p
 		onTerminated := p.Run(ctx)
 
 		go func(p *producer, onTerminated <-chan any) {
-			err := <-onTerminated
+			err, ok := <-onTerminated
 
-			if err != nil {
+			if ok && err != nil {
 				s.handleProducerPanic(p, ctx)
 			}
 		}(p, onTerminated)
@@ -72,14 +75,14 @@ func (s *producerSupervisor) Terminate() {
 //   - ctx: The context to pass to the new producer.
 func (s *producerSupervisor) handleProducerPanic(p *producer, ctx context.Context) {
 	delete(s.producers, p.Id)
-	newProducer := newProducer(s.config, s.messageProcessorResolver)
+	newProducer := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
 	s.producers[newProducer.Id] = newProducer
 	onTerminated := newProducer.Run(ctx)
 
 	go func(newProducer *producer, onTerminated <-chan any) {
-		err := <-onTerminated
+		err, ok := <-onTerminated
 
-		if err != nil {
+		if ok && err != nil {
 			s.handleProducerPanic(newProducer, ctx)
 		}
 	}(newProducer, onTerminated)

@@ -13,6 +13,7 @@ type PipelineConfig struct {
 	MessageProcessor     MessageProcessorConfig
 	Batchers             []BatcherConfig
 	PartitionKeyResolver PartitionKeyResolver
+	Acknowledger         Acknowledger
 }
 
 // Pipeline represents a Broadway processing pipeline that manages the
@@ -46,7 +47,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 		producerConfig.partitionKeyResolver = p.config.PartitionKeyResolver
 		producerSupervisor := newProducerSupervisor(producerConfig, func(partitionKey string) (string, bool) {
 			return messageProcessorSupervisor.Resolve(partitionKey)
-		})
+		}, p.config.Acknowledger)
 
 		producers, onProducersChange := producerSupervisor.Run(ctx)
 

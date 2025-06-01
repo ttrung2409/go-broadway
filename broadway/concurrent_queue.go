@@ -11,11 +11,11 @@ import (
 // Type parameter T can be any type.
 type concurrentQueue[T any] struct {
 	queue []T
-	mu    sync.Mutex
+	mu    sync.RWMutex
 }
 
 func newConcurrentQueue[T any]() *concurrentQueue[T] {
-	return &concurrentQueue[T]{queue: make([]T, 0), mu: sync.Mutex{}}
+	return &concurrentQueue[T]{queue: make([]T, 0), mu: sync.RWMutex{}}
 }
 
 // Enqueue adds one or more items to the end of the queue.
@@ -99,8 +99,8 @@ func (q *concurrentQueue[T]) DequeueAll() ([]T, bool) {
 // Returns:
 //   - true if the queue contains no items, false otherwise
 func (q *concurrentQueue[T]) IsEmpty() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 	return len(q.queue) == 0
 }
 
@@ -109,8 +109,8 @@ func (q *concurrentQueue[T]) IsEmpty() bool {
 // Returns:
 //   - The number of items in the queue
 func (q *concurrentQueue[T]) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 
 	return len(q.queue)
 }

@@ -3,12 +3,15 @@ package broadway
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/google/uuid"
 )
 
 type BatchProcessor interface {
+	New() BatchProcessor
+
 	// Handle processes a batch of messages and returns the processed messages
 	// along with any error that occurred during processing. The returned messages
 	// will be sent to the acknowledger for acknowledgment.
@@ -25,7 +28,8 @@ type BatchProcessor interface {
 
 type batchProcessor struct {
 	BatchProcessor
-	Id         string
+	Id string
+
 	receiver   chan []*Message
 	mu         sync.Mutex
 	terminated bool
@@ -35,7 +39,7 @@ type batchProcessor struct {
 func newBatchProcessor(p BatchProcessor) *batchProcessor {
 	return &batchProcessor{
 		Id:             uuid.NewString(),
-		BatchProcessor: p,
+		BatchProcessor: p.New(),
 		receiver:       make(chan []*Message),
 		mu:             sync.Mutex{},
 	}
@@ -54,12 +58,12 @@ func (p *batchProcessor) Run(ctx context.Context) <-chan any {
 	go func() {
 		defer func() {
 			p.terminated = true
-			p.mu.Unlock()
 
 			r := recover()
 
 			if r != nil {
-				fmt.Println("batch processor panicked:", r)
+				fmt.Printf("batch processor panicked: %v\n", r)
+				fmt.Println(string(debug.Stack()))
 				close(p.receiver)
 			}
 
@@ -68,14 +72,18 @@ func (p *batchProcessor) Run(ctx context.Context) <-chan any {
 		}()
 
 		for messages := range p.receiver {
-			processedMessages, err := p.Handle(messages, ctx)
+			func(messages []*Message) {
+				defer p.mu.Unlock()
 
-			acknowledger := messages[0].Acknowledger
-			if acknowledger != nil {
-				acknowledger.Ack(processedMessages, err)
-			}
+				fmt.Printf("Processing batch of %s in processor %s\n", messages[0].PartitionKey(), p.Id)
+
+				processedMessages, err := p.Handle(messages, ctx)
+
+				if ack := messages[0].Ack(); ack != nil {
+					ack(processedMessages, err)
+				}
+			}(messages)
 		}
-
 	}()
 
 	return onTerminated

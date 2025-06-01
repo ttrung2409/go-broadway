@@ -12,22 +12,23 @@ import (
 
 // ProducerConfig defines the configuration for a message producer.
 type ProducerConfig struct {
-	Concurrency          int         // Number of concurrent producer workers (default: 1)
-	Transformer          Transformer // Transforms raw message payloads into Messages (default: a transformer that wraps payload in a message)
-	Producer             Producer    // The actual implementation that generates message payloads
+	Concurrency          int      // Number of concurrent producer workers (default: 1)
+	Producer             Producer // The actual implementation that generates message payloads
 	partitionKeyResolver PartitionKeyResolver
 }
 
 // Producer is the interface that must be implemented when define a pipeline.
 // Producers generate message payloads in response to demand from the pipeline.
 type Producer interface {
+	New() Producer
+
 	// HandleDemand generates message payloads in response to demand from the pipeline.
 	//
 	// Parameters:
 	//   - demand: The number of messages requested by the pipeline.
 	//
 	// Returns:
-	//   - A slice of message payloads that will be transformed into Messages.
+	//   - A slice of message payloads
 	HandleDemand(demand int) []MessagePayload
 }
 
@@ -35,20 +36,19 @@ type messageProcessorResolver func(partitionKey string) (string, bool)
 
 type producer struct {
 	Producer
-	Id                       string
+	Id string
+
 	config                   ProducerConfig
 	requests                 *concurrentSlice[*request]
 	requestChan              chan *request
+	messages                 []*Message
 	mu                       sync.Mutex
 	terminated               bool
 	messageProcessorResolver messageProcessorResolver
-	messages                 []*Message
+	messageAck               Acknowledger
 }
 
-func newProducer(config ProducerConfig, messageProcessorResolver messageProcessorResolver) *producer {
-	if config.Transformer == nil {
-		config.Transformer = defaultTransformer(config.partitionKeyResolver)
-	}
+func newProducer(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producer {
 
 	if config.Concurrency == 0 {
 		config.Concurrency = 1
@@ -56,12 +56,13 @@ func newProducer(config ProducerConfig, messageProcessorResolver messageProcesso
 
 	return &producer{
 		Id:                       uuid.New().String(),
-		Producer:                 config.Producer,
+		Producer:                 config.Producer.New(),
 		config:                   config,
 		requests:                 newConcurrentSlice[*request](),
 		requestChan:              make(chan *request),
 		mu:                       sync.Mutex{},
 		messageProcessorResolver: messageProcessorResolver,
+		messageAck:               messageAck,
 	}
 }
 
@@ -73,7 +74,7 @@ func (p *producer) Run(ctx context.Context) <-chan any {
 			r := recover()
 
 			if r != nil {
-				fmt.Println("producer panicked:", r)
+				fmt.Printf("producer panicked: %v\n", r)
 				p.Terminate()
 			}
 
@@ -111,6 +112,7 @@ func (p *producer) Send(request *request) bool {
 
 func (p *producer) processRequests() {
 	for {
+
 		if p.terminated {
 			return
 		}
@@ -118,32 +120,32 @@ func (p *producer) processRequests() {
 		<-time.After(time.Millisecond * 500)
 
 		if p.requests.IsEmpty() {
-			return
+			continue
 		}
 
 		p.requests = p.requests.Filter(func(r *request) bool {
-			return !r.Closed()
+			return !r.IsClosed()
 		})
 
 		totalDemand := 0
-		p.requests.Each(func(request *request) {
+		p.requests.ForEach(func(request *request) {
 			totalDemand += request.Demand
 		})
 
 		if totalDemand == 0 {
-			return
+			continue
 		}
 
 		var messages []*Message
 
-		// Standard non-partitioned processing
-		records := p.HandleDemand(totalDemand)
-		messages = lo.Map(records, func(record MessagePayload, _ int) *Message {
-			message := p.config.Transformer(record)
-
+		payloads := p.HandleDemand(totalDemand)
+		messages = lo.Map(payloads, func(payload MessagePayload, _ int) *Message {
+			partitionKey := ""
 			if p.config.partitionKeyResolver != nil {
-				message.PartitionKey = p.config.partitionKeyResolver(record)
+				partitionKey = p.config.partitionKeyResolver(payload)
 			}
+
+			message := newMessage(messageArgs{payload: payload, ack: p.messageAck, partitionKey: partitionKey})
 
 			return message
 		})
@@ -172,7 +174,7 @@ func (p *producer) sendMessages() {
 		}
 
 		demand := min(request.Demand, len(p.messages))
-		ok = request.Send(p.messages[:demand])
+		ok = request.Reply(p.messages[:demand])
 
 		if !ok {
 			continue
@@ -191,7 +193,7 @@ func (p *producer) sendMessages() {
 
 func (p *producer) sendPartitionedMessages() {
 	partitionedMessages := lo.GroupBy(p.messages, func(message *Message) string {
-		return message.PartitionKey
+		return message.PartitionKey()
 	})
 
 	for partitionKey, partition := range partitionedMessages {
@@ -208,18 +210,19 @@ func (p *producer) sendPartitionedMessages() {
 			continue
 		}
 
-		demand := min(request.Demand, len(partition))
-		ok = request.Send(partition[:demand])
+		fmt.Printf("Sending %d messages to processor '%s'\n", len(partition), processorId)
+
+		ok = request.Reply(partition)
 		if !ok {
 			continue
 		}
 
-		request.Demand -= demand
+		request.Demand -= len(partition)
 		p.messages = lo.Filter(p.messages, func(m *Message, _ int) bool {
-			return !lo.Contains(partition[:demand], m)
+			return !lo.Contains(partition, m)
 		})
 
-		if request.Demand == 0 {
+		if request.Demand <= 0 {
 			request.Close()
 			p.requests.Remove(request)
 		}
