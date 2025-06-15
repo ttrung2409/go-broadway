@@ -9,8 +9,6 @@ type messageProcessorSupervisor struct {
 	hr     *hashRing[*messageProcessor]
 }
 
-// newMessageProcessorSupervisor creates a new message processor supervisor with the given configuration.
-// It initializes an empty map of processors that will be populated when Run is called.
 func newMessageProcessorSupervisor(config MessageProcessorConfig) *messageProcessorSupervisor {
 	return &messageProcessorSupervisor{
 		config: config,
@@ -19,12 +17,11 @@ func newMessageProcessorSupervisor(config MessageProcessorConfig) *messageProces
 }
 
 // Run starts the message processor supervisor with the provided context.
-// It creates and starts the configured number of message processors,
+// It in turn starts the configured number of message processors,
 // connecting them to the provided producers and batchers.
 //
 // Parameters:
-//   - ctx: The context that controls the lifecycle of the message processor supervisor and its processors.
-//     When cancelled, all processors will shut down gracefully.
+//   - ctx: The provided context when starting the pipeline
 //   - producers: A map of producer IDs to producer instances that the processors will receive messages from.
 //   - batchers: A map of batcher names to batcher instances that the processors will send processed messages to.
 func (s *messageProcessorSupervisor) Run(
@@ -79,6 +76,14 @@ func (s *messageProcessorSupervisor) SetBatchers(batchers map[string]*batcher) {
 	}
 }
 
+// Resolve attempts to find the message processor responsible for a given partition key.
+//
+// Parameters:
+//   - partitionKey: The partition key for which to find the responsible processor.
+//
+// Returns:
+//   - The ID of the message processor responsible for the partition key, or an empty string if not found.
+//   - A boolean indicating whether a processor was found for the given partition key.
 func (s *messageProcessorSupervisor) Resolve(partitionKey string) (string, bool) {
 	if processor, ok := s.hr.GetNode(partitionKey); ok {
 		return processor.Id, true

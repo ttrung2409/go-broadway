@@ -4,10 +4,19 @@ import (
 	"context"
 )
 
+// PartitionKeyResolver is a function that extracts a partition key from a message.
+// The partition key is used to ensure that messages with the same key are always processed
+// by the same message processor and batch processor (if batching is enabled),
+// which guarantees ordering of related messages.
+//
+// Parameters:
+//   - payload: The message payload to extract a partition key from
+//
+// Returns:
+//   - The partition key
 type PartitionKeyResolver func(payload MessagePayload) string
 
-// PipelineConfig defines the configuration for a Broadway pipeline,
-// consisting of a producer, message processor, and batchers.
+// PipelineConfig defines the configuration for a Broadway pipeline.
 type PipelineConfig struct {
 	Producer             ProducerConfig
 	MessageProcessor     MessageProcessorConfig
@@ -17,7 +26,9 @@ type PipelineConfig struct {
 }
 
 // Pipeline represents a Broadway processing pipeline that manages the
-// flow of messages from producers through batchers to message processors.
+// flow of messages from producers through message processors to batchers.
+// It orchestrates the interaction between these components to ensure efficient
+// message processing with proper partitioning, batching, and acknowledgment.
 type Pipeline struct {
 	config PipelineConfig
 }
@@ -25,11 +36,10 @@ type Pipeline struct {
 // NewPipeline creates a new Broadway pipeline with the given configuration.
 //
 // Parameters:
-//   - config: The configuration for the pipeline, specifying the producers, message processors,
-//     and batchers to be used.
+//   - config: The configuration for the pipeline
 //
 // Returns:
-//   - A new Pipeline instance ready to be started with Run.
+//   - A new Pipeline instance
 func NewPipeline(config PipelineConfig) *Pipeline {
 	return &Pipeline{config: config}
 }

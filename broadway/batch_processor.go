@@ -17,7 +17,7 @@ type BatchProcessor interface {
 	// will be sent to the acknowledger for acknowledgment.
 	//
 	// Parameters:
-	//   - messages: The batch of messages to process.
+	//   - messages: The batch of messages to be processed.
 	//   - ctx: The context provided when starting the pipeline.
 	//
 	// Returns:

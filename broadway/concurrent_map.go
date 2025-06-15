@@ -4,6 +4,8 @@ import (
 	"sync"
 )
 
+// concurrentMap is a thread-safe map implementation that allows concurrent access
+// from multiple goroutines.
 type concurrentMap[K comparable, V any] struct {
 	data map[K]V
 	mu   sync.RWMutex
@@ -15,7 +17,9 @@ func newConcurrentMap[K comparable, V any]() *concurrentMap[K, V] {
 	}
 }
 
-// Get retrieves a value for the given key
+// Get retrieves a value for the given key.
+// Returns the value and a boolean flag indicating if the key was found.
+// If the key doesn't exist, the zero value of V and false are returned.
 func (m *concurrentMap[K, V]) Get(key K) (V, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -23,14 +27,16 @@ func (m *concurrentMap[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
-// Set stores a value for the given key
+// Set stores a value for the given key.
+// If the key already exists, its value will be overwritten.
 func (m *concurrentMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data[key] = value
 }
 
-// Delete removes a key-value pair
+// Delete removes a key-value pair from the map.
+// If the key doesn't exist, the operation is a no-op.
 func (m *concurrentMap[K, V]) Delete(key K) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

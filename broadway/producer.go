@@ -66,6 +66,13 @@ func newProducer(config ProducerConfig, messageProcessorResolver messageProcesso
 	}
 }
 
+// Run starts the producer with the provided context in a goroutine.
+//
+// Parameters:
+//   - ctx: The context provided when starting the pipeline.
+//
+// Returns:
+//   - A channel that will receive a value (possibly an error) when the producer terminates.
 func (p *producer) Run(ctx context.Context) <-chan any {
 	onTerminated := make(chan any)
 
@@ -97,6 +104,13 @@ func (p *producer) Run(ctx context.Context) <-chan any {
 	return onTerminated
 }
 
+// Send submits a request to the producer for processing.
+//
+// Parameters:
+//   - request: The request containing demand information from a message processor
+//
+// Returns:
+//   - true if the request was sent successfully, false if the producer is terminated
 func (p *producer) Send(request *request) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -110,6 +124,8 @@ func (p *producer) Send(request *request) bool {
 	return true
 }
 
+// processRequests continuously processes incoming requests by generating messages
+// in response to demand and sending them to the appropriate message processors.
 func (p *producer) processRequests() {
 	for {
 
@@ -161,6 +177,8 @@ func (p *producer) processRequests() {
 	}
 }
 
+// sendMessages distributes messages to message processors in a round-robin fashion,
+// without regard to partition keys.
 func (p *producer) sendMessages() {
 	for {
 		if len(p.messages) == 0 {
@@ -191,6 +209,9 @@ func (p *producer) sendMessages() {
 	}
 }
 
+// sendPartitionedMessages distributes messages to message processors based on their
+// partition keys. Messages with the same partition key are guaranteed to be processed
+// by the same message processor. This ensures ordering of related messages.
 func (p *producer) sendPartitionedMessages() {
 	partitionedMessages := lo.GroupBy(p.messages, func(message *Message) string {
 		return message.PartitionKey()
@@ -232,7 +253,6 @@ func (p *producer) sendPartitionedMessages() {
 
 // Terminate stops the producer and releases all resources.
 // After calling Terminate, the producer will no longer accept new requests.
-// This method is thread-safe and idempotent.
 func (p *producer) Terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

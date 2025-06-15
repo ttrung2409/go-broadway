@@ -20,7 +20,7 @@ type BatcherConfig struct {
 
 // batcher is responsible for collecting individual messages into batches
 // and forwarding them to batch processors. It supports grouping messages by
-// batch key and optionally by partition key when partitioning is enabled.
+// batch key or partition key when partitioning is enabled.
 //
 // The batcher maintains queues of messages for each batch key, and processes
 // batches when either:
@@ -30,12 +30,12 @@ type BatcherConfig struct {
 // When partitioning is enabled, messages with the same partition key will
 // be consistently routed to the same batch processor.
 type batcher struct {
-	config     BatcherConfig                                      // Configuration for this batcher
-	messages   *concurrentMap[string, *concurrentQueue[*Message]] // Map of batch key to message queue
-	hr         *hashRing[*batchProcessor]                         // Hash ring for routing batches to processors
-	receiver   chan []*Message                                    // Channel for receiving new messages
-	terminated bool                                               // Flag indicating whether the batcher is terminated
-	mu         sync.Mutex                                         // Mutex for thread-safe operations
+	config     BatcherConfig
+	messages   *concurrentMap[string, *concurrentQueue[*Message]]
+	hr         *hashRing[*batchProcessor]
+	receiver   chan []*Message
+	terminated bool
+	mu         sync.Mutex
 }
 
 func newBatcher(config BatcherConfig) *batcher {
@@ -159,10 +159,6 @@ func (b *batcher) Send(messages []*Message) bool {
 // flush processes all remaining messages in the batcher's queues when the batcher
 // is being terminated. It attempts to deliver all batched messages to their respective
 // batch processors before shutting down.
-//
-// This method will retry processing any batches that couldn't be successfully sent
-// to a batch processor, with a short delay between retries, until all messages have
-// been processed or the batcher gives up.
 func (b *batcher) flush() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -195,10 +191,6 @@ func (b *batcher) flush() {
 // It continuously monitors the message queues and processes batches when either:
 //  1. A batch reaches the configured batch size
 //  2. The batch timeout expires
-//
-// The method balances efficiency (by waiting for full batches) with timely processing
-// (by processing partial batches after a timeout). If a batch cannot be processed
-// successfully, the messages are put back in the queue to be retried later.
 func (b *batcher) processBatches() {
 	ticker := time.NewTicker(b.config.BatchTimeout)
 	defer ticker.Stop()
@@ -248,8 +240,7 @@ func (b *batcher) processBatches() {
 }
 
 // processBatch sends a batch of messages to an appropriate batch processor.
-// When partitioning is enabled, it uses the partition key of the first message
-// to select a processor, ensuring that all messages with the same partition key
+// When partitioning is enabled, it ensures that all messages with the same partition key
 // are processed by the same batch processor.
 //
 // Parameters:
@@ -278,8 +269,8 @@ func (b *batcher) processBatch(batchKey string, batch []*Message) bool {
 //  4. The new processor is monitored for failures
 //
 // Parameters:
-//   - processor: The failed batch processor to replace
-//   - ctx: The context for creating the new processor
+//   - processor: The failed batch processor to be replaced
+//   - ctx: The context provided when starting the pipeline
 func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

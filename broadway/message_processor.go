@@ -22,22 +22,18 @@ type MessageProcessorConfig struct {
 	MaxDemand   int              // Maximum number of messages to request from producers (default: 10)
 }
 
-// MessageProcessor is the interface that must be implemented by components
-// that process individual messages. It defines a single method for handling
-// individual messages with a context.
 type MessageProcessor interface {
 	New() MessageProcessor
 
 	// Handle processes a single message and returns the processed message
-	// along with any error that occurred during processing. The implementation
-	// should be safe for concurrent use.
+	// along with any error that occurred during processing.
 	//
 	// Parameters:
-	//   - message: The message to process.
-	//   - ctx: The context for the processing operation. Can be used to handle timeouts or cancellation.
+	//   - message: The message to be processed.
+	//   - ctx: The context provided when starting the pipeline
 	//
 	// Returns:
-	//   - The processed message, or nil if the message should be discarded.
+	//   - The processed message
 	//   - An error if processing failed, or nil if successful.
 	Handle(message *Message, ctx context.Context) (*Message, error)
 }
@@ -55,6 +51,17 @@ type messageProcessor struct {
 	mu              sync.RWMutex
 }
 
+// newMessageProcessor creates a new message processor with the given configuration,
+// producers, and batchers. It initializes the processor and sets default values
+// for configuration parameters if they're not provided.
+//
+// Parameters:
+//   - config: Configuration for the message processor
+//   - producers: A map of producer IDs to producer instances
+//   - batchers: A map of batcher names to batcher instances
+//
+// Returns:
+//   - An initialized message processor
 func newMessageProcessor(
 	config MessageProcessorConfig,
 	producers map[string]*producer,
@@ -82,12 +89,9 @@ func newMessageProcessor(
 
 // Run starts the message processor with the provided context.
 // It processes messages from producers and forwards them to batchers.
-// Returns a channel that will receive a value when the processor terminates,
-// either due to context cancellation or an error.
 //
 // Parameters:
-//   - ctx: The context that controls the lifecycle of the processor. When cancelled,
-//     the processor will shut down gracefully.
+//   - ctx: The context provided when starting the pipeline.
 //
 // Returns:
 //   - A channel that will receive a value (possibly an error) when the processor terminates.
@@ -153,6 +157,11 @@ func (p *messageProcessor) Terminate() {
 	p.terminated = true
 }
 
+// flush processes any remaining messages in the queue before shutdown.
+// This ensures that all messages received before termination are properly processed.
+//
+// Parameters:
+//   - ctx: The context provided when starting the pipeline.
 func (p *messageProcessor) flush(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -165,6 +174,13 @@ func (p *messageProcessor) flush(ctx context.Context) {
 	}
 }
 
+// process handles a batch of messages by passing messages to the configured processor.
+// It then routes them to the appropriate batchers according to their batcher and batch key,
+// or acknowledges them if no batcher is defined.
+//
+// Parameters:
+//   - messages: A slice of messages to be processed.
+//   - ctx: The context provided when starting the pipeline.
 func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 	messages = lo.Map(messages, func(message *Message, _ int) *Message {
 		processedMessage, err := p.Handle(message, ctx)
@@ -205,6 +221,7 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 	}
 }
 
+// request sends requests to the producers to obtain more messages.
 func (p *messageProcessor) request() {
 
 	demand := p.config.MaxDemand - p.config.MinDemand
@@ -238,10 +255,20 @@ func (p *messageProcessor) request() {
 	}
 }
 
+// SetProducers assigns a map of producers to this message processor.
+// The message processor will request messages from these producers
+//
+// Parameters:
+//   - producers: A map of producer IDs to producer instances.
 func (p *messageProcessor) SetProducers(producers map[string]*producer) {
 	p.producers = producers
 }
 
+// SetBatchers assigns a map of batchers to this message processor.
+// Processed messages will be sent to these batchers for further processing.
+//
+// Parameters:
+//   - batchers: A map of batcher names to batcher instances.
 func (p *messageProcessor) SetBatchers(batchers map[string]*batcher) {
 	p.batchers = batchers
 }

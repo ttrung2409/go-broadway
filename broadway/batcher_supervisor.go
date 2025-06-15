@@ -26,7 +26,7 @@ func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 //
 // Returns:
 //   - A map of batcher ids to batcher instances that are currently active.
-//   - A channel that will receive updates to the batchers when a batcher panics
+//   - A channel that will receive updates to the batchers, i.e. when a batcher panics
 //     and a new batcher is created.
 func (s *batcherSupervisor) Run(
 	ctx context.Context,
