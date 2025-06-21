@@ -30,10 +30,11 @@ type batchProcessor struct {
 	BatchProcessor
 	Id string
 
-	receiver   chan []*Message
-	mu         sync.Mutex
-	terminated bool
-	paused     bool
+	receiver     chan []*Message
+	mu           sync.Mutex
+	terminated   bool
+	paused       bool
+	onTerminated chan any
 }
 
 func newBatchProcessor(p BatchProcessor) *batchProcessor {
@@ -42,6 +43,7 @@ func newBatchProcessor(p BatchProcessor) *batchProcessor {
 		BatchProcessor: p.New(),
 		receiver:       make(chan []*Message),
 		mu:             sync.Mutex{},
+		onTerminated:   make(chan any),
 	}
 }
 
@@ -49,11 +51,7 @@ func newBatchProcessor(p BatchProcessor) *batchProcessor {
 //
 // Parameters:
 //   - ctx: The context provided when starting the pipeline.
-//
-// Returns:
-//   - A channel that will receive a value, possibly an error, when the processor terminates.
-func (p *batchProcessor) Run(ctx context.Context) <-chan any {
-	onTerminated := make(chan any)
+func (p *batchProcessor) Run(ctx context.Context) {
 
 	go func() {
 		defer func() {
@@ -67,15 +65,15 @@ func (p *batchProcessor) Run(ctx context.Context) <-chan any {
 				close(p.receiver)
 			}
 
-			onTerminated <- r
-			close(onTerminated)
+			p.onTerminated <- r
+			close(p.onTerminated)
 		}()
 
 		for messages := range p.receiver {
+			fmt.Println("Processing batch of messages in batch processor", messages[0].BatchKey)
+
 			func(messages []*Message) {
 				defer p.mu.Unlock()
-
-				fmt.Printf("Processing batch of %s in processor %s\n", messages[0].PartitionKey(), p.Id)
 
 				processedMessages, err := p.Handle(messages, ctx)
 
@@ -86,7 +84,6 @@ func (p *batchProcessor) Run(ctx context.Context) <-chan any {
 		}
 	}()
 
-	return onTerminated
 }
 
 // Send attempts to send a batch of messages to this batch processor for processing.
@@ -144,4 +141,8 @@ func (p *batchProcessor) Resume() {
 // ToString returns a string representation of this batch processor.
 func (p *batchProcessor) ToString() string {
 	return p.Id
+}
+
+func (p *batchProcessor) OnTerminated() <-chan any {
+	return p.onTerminated
 }

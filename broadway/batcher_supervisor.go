@@ -1,20 +1,27 @@
 package broadway
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // batcherSupervisor manages a collection of batchers, handling their lifecycle
 // and ensuring fault tolerance by restarting batchers that panic during execution.
 type batcherSupervisor struct {
-	config           []BatcherConfig
-	batchers         map[string]*batcher
-	onBatchersChange chan map[string]*batcher
+	config                  []BatcherConfig
+	batchers                *concurrentMap[string, *batcher]
+	mu                      sync.Mutex
+	onBatchersChange        chan map[string]*batcher
+	onAllBatchersTerminated chan bool
 }
 
 func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 	return &batcherSupervisor{
-		config:           config,
-		batchers:         make(map[string]*batcher),
-		onBatchersChange: make(chan map[string]*batcher),
+		config:                  config,
+		batchers:                newConcurrentMap[string, *batcher](),
+		mu:                      sync.Mutex{},
+		onBatchersChange:        make(chan map[string]*batcher),
+		onAllBatchersTerminated: make(chan bool),
 	}
 }
 
@@ -26,36 +33,37 @@ func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 //
 // Returns:
 //   - A map of batcher ids to batcher instances that are currently active.
-//   - A channel that will receive updates to the batchers, i.e. when a batcher panics
-//     and a new batcher is created.
 func (s *batcherSupervisor) Run(
 	ctx context.Context,
-) (map[string]*batcher, <-chan map[string]*batcher) {
+) map[string]*batcher {
 
 	if s.config == nil {
-		return nil, nil
+		return nil
 	}
 
 	for _, batcherConfig := range s.config {
 		b := newBatcher(batcherConfig)
-		s.batchers[batcherConfig.Name] = b
-		onTerminated := b.Run(ctx)
+		s.batchers.Set(b.Name(), b)
+		b.Run(ctx)
 
-		go func(b *batcher, onTerminated <-chan any) {
-			err, ok := <-onTerminated
-
-			if ok && err != nil {
-				s.handleBatcherPanic(b, ctx)
+		go func(b *batcher) {
+			if panic, ok := <-b.OnTerminated(); ok {
+				if panic != nil {
+					s.handleBatcherPanic(b, ctx)
+				} else {
+					s.checkIfAllBatchersTerminated()
+				}
 			}
-		}(b, onTerminated)
+
+		}(b)
 	}
 
-	return s.batchers, s.onBatchersChange
+	return s.batchers.ToMap()
 }
 
 // Terminate stops all batchers managed by this supervisor.
 func (s *batcherSupervisor) Terminate() {
-	for _, b := range s.batchers {
+	for _, b := range s.batchers.ToMap() {
 		b.Terminate()
 	}
 
@@ -63,18 +71,50 @@ func (s *batcherSupervisor) Terminate() {
 }
 
 func (s *batcherSupervisor) handleBatcherPanic(b *batcher, ctx context.Context) {
-
 	newBatcher := newBatcher(b.config)
-	s.batchers[b.config.Name] = newBatcher
-	onTerminated := newBatcher.Run(ctx)
+	s.batchers.Set(b.config.Name, newBatcher)
+	newBatcher.Run(ctx)
 
-	go func(newBatcher *batcher, onTerminated <-chan any) {
-		err, ok := <-onTerminated
-
-		if ok && err != nil {
-			s.handleBatcherPanic(newBatcher, ctx)
+	go func(b *batcher) {
+		if panic, ok := <-b.OnTerminated(); ok {
+			if panic != nil {
+				s.handleBatcherPanic(b, ctx)
+			} else {
+				s.checkIfAllBatchersTerminated()
+			}
 		}
-	}(newBatcher, onTerminated)
+	}(newBatcher)
 
-	s.onBatchersChange <- s.batchers
+	s.onBatchersChange <- s.batchers.ToMap()
+}
+
+func (s *batcherSupervisor) OnAllBatchersTerminated() <-chan bool {
+	return s.onAllBatchersTerminated
+}
+
+func (s *batcherSupervisor) checkIfAllBatchersTerminated() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.onAllBatchersTerminated == nil {
+		return
+	}
+
+	allTerminated := true
+
+	for _, b := range s.batchers.ToMap() {
+		if !b.IsTerminated() {
+			allTerminated = false
+		}
+	}
+
+	if allTerminated {
+		s.onAllBatchersTerminated <- true
+		close(s.onAllBatchersTerminated)
+		s.onAllBatchersTerminated = nil
+	}
+}
+
+func (s *batcherSupervisor) OnBatchersChange() <-chan map[string]*batcher {
+	return s.onBatchersChange
 }

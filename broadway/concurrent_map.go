@@ -11,9 +11,21 @@ type concurrentMap[K comparable, V any] struct {
 	mu   sync.RWMutex
 }
 
-func newConcurrentMap[K comparable, V any]() *concurrentMap[K, V] {
+func newConcurrentMap[K comparable, V any](m ...map[K]V) *concurrentMap[K, V] {
+	if len(m) == 0 {
+		return &concurrentMap[K, V]{
+			data: make(map[K]V),
+		}
+	}
+
+	cloned := make(map[K]V)
+	for k, v := range m[0] {
+		cloned[k] = v
+	}
+
 	return &concurrentMap[K, V]{
-		data: make(map[K]V),
+		data: cloned,
+		mu:   sync.RWMutex{},
 	}
 }
 
@@ -51,6 +63,8 @@ func (m *concurrentMap[K, V]) Len() int {
 }
 
 // ForEach safely iterates over each key-value pair in the map
+// and applies the provided function. If the function returns false,
+// the iteration stops early.
 func (m *concurrentMap[K, V]) ForEach(fn func(K, V) bool) {
 	m.mu.RLock()
 	snapshot := make(map[K]V)
@@ -64,4 +78,53 @@ func (m *concurrentMap[K, V]) ForEach(fn func(K, V) bool) {
 			break
 		}
 	}
+}
+
+func (m *concurrentMap[K, V]) ToMap() map[K]V {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	snapshot := make(map[K]V)
+	for k, v := range m.data {
+		snapshot[k] = v
+	}
+
+	return snapshot
+}
+
+func (m *concurrentMap[K, V]) Reset(new map[K]V) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(new) == 0 {
+		return
+	}
+
+	m.data = make(map[K]V, len(new))
+	for k, v := range new {
+		m.data[k] = v
+	}
+}
+
+func (m *concurrentMap[K, V]) Keys() []K {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	keys := make([]K, 0)
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+
+	return keys
+}
+
+func (m *concurrentMap[K, V]) Values() []V {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	values := make([]V, 0)
+	for _, v := range m.data {
+		values = append(values, v)
+	}
+
+	return values
 }

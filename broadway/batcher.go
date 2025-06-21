@@ -30,12 +30,13 @@ type BatcherConfig struct {
 // When partitioning is enabled, messages with the same partition key will
 // be consistently routed to the same batch processor.
 type batcher struct {
-	config     BatcherConfig
-	messages   *concurrentMap[string, *concurrentQueue[*Message]]
-	hr         *hashRing[*batchProcessor]
-	receiver   chan []*Message
-	terminated bool
-	mu         sync.Mutex
+	config       BatcherConfig
+	messages     *concurrentMap[string, *concurrentQueue[*Message]]
+	hr           *hashRing[*batchProcessor]
+	receiver     chan []*Message
+	terminated   bool
+	mu           sync.Mutex
+	onTerminated chan any
 }
 
 func newBatcher(config BatcherConfig) *batcher {
@@ -52,11 +53,12 @@ func newBatcher(config BatcherConfig) *batcher {
 	}
 
 	return &batcher{
-		config:   config,
-		messages: newConcurrentMap[string, *concurrentQueue[*Message]](),
-		hr:       newHashRing[*batchProcessor](),
-		receiver: make(chan []*Message),
-		mu:       sync.Mutex{},
+		config:       config,
+		messages:     newConcurrentMap[string, *concurrentQueue[*Message]](),
+		hr:           newHashRing[*batchProcessor](),
+		receiver:     make(chan []*Message),
+		mu:           sync.Mutex{},
+		onTerminated: make(chan any),
 	}
 }
 
@@ -65,24 +67,20 @@ func newBatcher(config BatcherConfig) *batcher {
 //
 // Parameters:
 //   - ctx: The context provided when starting the pipeline
-//
-// Returns:
-//   - A channel that will receive a value, possibly an error, when the batcher terminates
-func (b *batcher) Run(ctx context.Context) <-chan any {
-	onTerminated := make(chan any)
+func (b *batcher) Run(ctx context.Context) {
 
 	for i := 0; i < b.config.Concurrency; i++ {
 		processor := newBatchProcessor(b.config.Processor)
-		onTerminated := processor.Run(ctx)
+		processor.Run(ctx)
 		b.hr.AddNode(processor)
 
-		go func(processor *batchProcessor, onTerminated <-chan any) {
-			err, ok := <-onTerminated
+		go func(p *batchProcessor) {
+			panic, ok := <-p.OnTerminated()
 
-			if ok && err != nil {
-				b.handleProcessorPanic(processor, ctx)
+			if ok && panic != nil {
+				b.handleProcessorPanic(p, ctx)
 			}
-		}(processor, onTerminated)
+		}(processor)
 	}
 
 	go func() {
@@ -101,11 +99,13 @@ func (b *batcher) Run(ctx context.Context) <-chan any {
 				processor.Terminate()
 			}
 
-			onTerminated <- r
-			close(onTerminated)
+			b.onTerminated <- r
+			close(b.onTerminated)
+			b.onTerminated = nil
 		}()
 
 		for messages := range b.receiver {
+
 			for _, message := range messages {
 				if _, ok := b.messages.Get(message.BatchKey); !ok {
 					b.messages.Set(message.BatchKey, newConcurrentQueue[*Message]())
@@ -119,10 +119,10 @@ func (b *batcher) Run(ctx context.Context) <-chan any {
 
 	go b.processBatches()
 
-	return onTerminated
 }
 
-// Terminate stops the batcher. After calling Terminate, the batcher will no longer accept new messages.
+// Terminate flushes all remaining messages in the queues and stops the batcher.
+// After calling Terminate, the batcher will no longer accept new messages.
 func (b *batcher) Terminate() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -144,6 +144,7 @@ func (b *batcher) Terminate() {
 // Returns:
 //   - true if the messages were accepted, false otherwise
 func (b *batcher) Send(messages []*Message) bool {
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -166,6 +167,8 @@ func (b *batcher) flush() {
 		}
 	}()
 
+	count := 0
+
 	for {
 		b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
 			if batch, ok := messages.DequeueAll(); ok {
@@ -174,6 +177,8 @@ func (b *batcher) flush() {
 				} else {
 					messages.Prepend(batch...)
 				}
+			} else {
+				b.messages.Delete(batchKey)
 			}
 
 			return true
@@ -183,7 +188,13 @@ func (b *batcher) flush() {
 			return
 		}
 
-		time.Sleep(time.Millisecond * 500)
+		count++
+
+		if count > 10 {
+			panic("Failed to flush all messages in batcher after multiple attempts")
+		}
+
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -202,12 +213,11 @@ func (b *batcher) processBatches() {
 
 		select {
 		case <-ticker.C:
+
 			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
-				if messages.Len() > 0 {
-					if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
-						if !b.processBatch(batchKey, batch) {
-							messages.Prepend(batch...)
-						}
+				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
+					if !b.processBatch(batchKey, batch) {
+						messages.Prepend(batch...)
 					}
 				}
 
@@ -215,6 +225,7 @@ func (b *batcher) processBatches() {
 			})
 
 		default:
+
 			// Check for any batches that have reached the batch size threshold
 			hasBatchesReachedThreshold := false
 			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
@@ -250,6 +261,7 @@ func (b *batcher) processBatches() {
 // Returns:
 //   - true if the batch was successfully sent to a processor, false otherwise
 func (b *batcher) processBatch(batchKey string, batch []*Message) bool {
+
 	if processor, ok := b.hr.GetNode(batchKey); ok {
 		return processor.Send(batch)
 	}
@@ -278,7 +290,7 @@ func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Co
 	b.hr.RemoveNode(processor)
 
 	newProcessor := newBatchProcessor(b.config.Processor)
-	onTerminated := newProcessor.Run(ctx)
+	newProcessor.Run(ctx)
 
 	keySharingProcessor, _ := b.hr.GetNextNode(newProcessor)
 
@@ -292,11 +304,23 @@ func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Co
 		keySharingProcessor.Resume()
 	}
 
-	go func(processor *batchProcessor, onTerminated <-chan any) {
-		err, ok := <-onTerminated
+	go func(p *batchProcessor) {
+		panic, ok := <-p.OnTerminated()
 
-		if ok && err != nil {
-			b.handleProcessorPanic(processor, ctx)
+		if ok && panic != nil {
+			b.handleProcessorPanic(p, ctx)
 		}
-	}(newProcessor, onTerminated)
+	}(newProcessor)
+}
+
+func (b *batcher) OnTerminated() <-chan any {
+	return b.onTerminated
+}
+
+func (b *batcher) IsTerminated() bool {
+	return b.onTerminated == nil
+}
+
+func (b *batcher) Name() string {
+	return b.config.Name
 }

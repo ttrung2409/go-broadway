@@ -1,24 +1,28 @@
 package broadway
 
-import "context"
+import (
+	"context"
+)
 
 // producerSupervisor manages a pool of producer instances, handling their lifecycle
 // and ensuring fault tolerance by restarting producers that panic during execution.
 type producerSupervisor struct {
 	config                   ProducerConfig
-	producers                map[string]*producer
+	producers                *concurrentMap[string, *producer]
 	messageProcessorResolver messageProcessorResolver
 	messageAck               Acknowledger
 	onProducersChange        chan map[string]*producer
+	onAllProducersDrained    chan bool
 }
 
 func newProducerSupervisor(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producerSupervisor {
 	return &producerSupervisor{
 		config:                   config,
-		producers:                make(map[string]*producer),
+		producers:                newConcurrentMap[string, *producer](),
 		messageProcessorResolver: messageProcessorResolver,
 		messageAck:               messageAck,
 		onProducersChange:        make(chan map[string]*producer),
+		onAllProducersDrained:    make(chan bool),
 	}
 }
 
@@ -30,32 +34,52 @@ func newProducerSupervisor(config ProducerConfig, messageProcessorResolver messa
 //
 // Returns:
 //   - A map of producer IDs to producer instances that are currently active.
-//   - A channel that will receive updates to the producers, i.e. when a producer failed and is replaced
 func (s *producerSupervisor) Run(
 	ctx context.Context,
-) (map[string]*producer, <-chan map[string]*producer) {
+) map[string]*producer {
 
 	for i := 0; i < s.config.Concurrency; i++ {
 		p := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
-		s.producers[p.Id] = p
-		onTerminated := p.Run(ctx)
+		s.producers.Set(p.Id, p)
+		p.Run(ctx)
 
-		go func(p *producer, onTerminated <-chan any) {
-			err, ok := <-onTerminated
+		go func(p *producer) {
+			for {
+				select {
+				case <-p.OnDrained():
+					allDrained := true
 
-			if ok && err != nil {
-				s.handleProducerPanic(p, ctx)
+					s.producers.ForEach(func(_ string, producer *producer) bool {
+						if !producer.IsDrained() {
+							allDrained = false
+						}
+
+						return true
+					})
+
+					if allDrained {
+						select {
+						case s.onAllProducersDrained <- true: // sent successfully
+						default: // no receiver, ignore
+						}
+					}
+
+				case panic, ok := <-p.OnTerminated():
+					if ok && panic != nil {
+						s.handleProducerPanic(p, ctx)
+					}
+				}
 			}
-		}(p, onTerminated)
+		}(p)
 	}
 
-	return s.producers, s.onProducersChange
+	return s.producers.ToMap()
 }
 
-// Terminate stops all producers managed by this supervisor and releases all resources.
+// Terminate stops all producers managed by this supervisor.
 // This should be called when shutting down the pipeline to ensure proper cleanup.
 func (s *producerSupervisor) Terminate() {
-	for _, p := range s.producers {
+	for _, p := range s.producers.ToMap() {
 		p.Terminate()
 	}
 
@@ -70,18 +94,26 @@ func (s *producerSupervisor) Terminate() {
 //   - p: The producer that panicked and needs to be replaced.
 //   - ctx: The context provided when starting the pipeline.
 func (s *producerSupervisor) handleProducerPanic(p *producer, ctx context.Context) {
-	delete(s.producers, p.Id)
+	s.producers.Delete(p.Id)
 	newProducer := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
-	s.producers[newProducer.Id] = newProducer
-	onTerminated := newProducer.Run(ctx)
+	s.producers.Set(newProducer.Id, newProducer)
+	newProducer.Run(ctx)
 
-	go func(newProducer *producer, onTerminated <-chan any) {
-		err, ok := <-onTerminated
+	go func(p *producer) {
+		panic, ok := <-p.OnTerminated()
 
-		if ok && err != nil {
-			s.handleProducerPanic(newProducer, ctx)
+		if ok && panic != nil {
+			s.handleProducerPanic(p, ctx)
 		}
-	}(newProducer, onTerminated)
+	}(newProducer)
 
-	s.onProducersChange <- s.producers
+	s.onProducersChange <- s.producers.ToMap()
+}
+
+func (s *producerSupervisor) OnAllProducersDrained() <-chan bool {
+	return s.onAllProducersDrained
+}
+
+func (s *producerSupervisor) OnProducersChange() <-chan map[string]*producer {
+	return s.onProducersChange
 }

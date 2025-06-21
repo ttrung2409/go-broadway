@@ -30,7 +30,9 @@ type PipelineConfig struct {
 // It orchestrates the interaction between these components to ensure efficient
 // message processing with proper partitioning, batching, and acknowledgment.
 type Pipeline struct {
-	config PipelineConfig
+	config            PipelineConfig
+	onProducerDrained chan bool
+	onTerminated      chan bool
 }
 
 // NewPipeline creates a new Broadway pipeline with the given configuration.
@@ -41,7 +43,7 @@ type Pipeline struct {
 // Returns:
 //   - A new Pipeline instance
 func NewPipeline(config PipelineConfig) *Pipeline {
-	return &Pipeline{config: config}
+	return &Pipeline{config: config, onProducerDrained: make(chan bool), onTerminated: make(chan bool)}
 }
 
 // Run starts the pipeline in a goroutine with the provided context.
@@ -59,20 +61,39 @@ func (p *Pipeline) Run(ctx context.Context) {
 			return messageProcessorSupervisor.Resolve(partitionKey)
 		}, p.config.Acknowledger)
 
-		producers, onProducersChange := producerSupervisor.Run(ctx)
+		producers := producerSupervisor.Run(ctx)
 
 		batcherSupervisor := newBatcherSupervisor(p.config.Batchers)
-		batcherInstances, onBatchersChange := batcherSupervisor.Run(ctx)
+		batchers := batcherSupervisor.Run(ctx)
 
-		messageProcessorSupervisor.Run(ctx, producers, batcherInstances)
+		messageProcessorSupervisor.Run(ctx, producers, batchers)
 
 		go func() {
+			allMessageProcessorsTerminated := false
+			allBatchersTerminated := false
+
+			if len(p.config.Batchers) == 0 {
+				allBatchersTerminated = true
+			}
+
 			for {
+				if allBatchersTerminated && allMessageProcessorsTerminated {
+					p.terminate()
+					return
+				}
+
 				select {
-				case producers := <-onProducersChange:
+				case producers := <-producerSupervisor.OnProducersChange():
 					messageProcessorSupervisor.SetProducers(producers)
-				case batcherInstances := <-onBatchersChange:
+				case batcherInstances := <-batcherSupervisor.OnBatchersChange():
 					messageProcessorSupervisor.SetBatchers(batcherInstances)
+				case <-producerSupervisor.OnAllProducersDrained():
+					p.onProducerDrained <- true
+				case <-messageProcessorSupervisor.OnAllProcessorsTerminated():
+					allMessageProcessorsTerminated = true
+				case <-batcherSupervisor.OnAllBatchersTerminated():
+					allBatchersTerminated = true
+
 				}
 			}
 		}()
@@ -82,5 +103,19 @@ func (p *Pipeline) Run(ctx context.Context) {
 		producerSupervisor.Terminate()
 		messageProcessorSupervisor.Terminate()
 		batcherSupervisor.Terminate()
+
 	}()
+}
+
+func (p *Pipeline) terminate() {
+	close(p.onProducerDrained)
+	close(p.onTerminated)
+}
+
+func (p *Pipeline) OnProducerDrained() <-chan bool {
+	return p.onProducerDrained
+}
+
+func (p *Pipeline) OnTerminated() <-chan bool {
+	return p.onTerminated
 }

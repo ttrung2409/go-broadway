@@ -44,8 +44,11 @@ type producer struct {
 	messages                 []*Message
 	mu                       sync.Mutex
 	terminated               bool
+	drained                  bool
 	messageProcessorResolver messageProcessorResolver
 	messageAck               Acknowledger
+	onDrained                chan bool
+	onTerminated             chan any
 }
 
 func newProducer(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producer {
@@ -63,6 +66,8 @@ func newProducer(config ProducerConfig, messageProcessorResolver messageProcesso
 		mu:                       sync.Mutex{},
 		messageProcessorResolver: messageProcessorResolver,
 		messageAck:               messageAck,
+		onDrained:                make(chan bool),
+		onTerminated:             make(chan any),
 	}
 }
 
@@ -70,11 +75,7 @@ func newProducer(config ProducerConfig, messageProcessorResolver messageProcesso
 //
 // Parameters:
 //   - ctx: The context provided when starting the pipeline.
-//
-// Returns:
-//   - A channel that will receive a value (possibly an error) when the producer terminates.
-func (p *producer) Run(ctx context.Context) <-chan any {
-	onTerminated := make(chan any)
+func (p *producer) Run(ctx context.Context) {
 
 	go func() {
 		defer func() {
@@ -90,8 +91,8 @@ func (p *producer) Run(ctx context.Context) <-chan any {
 				request.Close()
 			}
 
-			onTerminated <- r
-			close(onTerminated)
+			p.onTerminated <- r
+			close(p.onTerminated)
 		}()
 
 		for request := range p.requestChan {
@@ -100,8 +101,6 @@ func (p *producer) Run(ctx context.Context) <-chan any {
 	}()
 
 	go p.processRequests()
-
-	return onTerminated
 }
 
 // Send submits a request to the producer for processing.
@@ -133,7 +132,7 @@ func (p *producer) processRequests() {
 			return
 		}
 
-		<-time.After(time.Millisecond * 500)
+		<-time.After(time.Millisecond * 100)
 
 		if p.requests.IsEmpty() {
 			continue
@@ -165,6 +164,17 @@ func (p *producer) processRequests() {
 
 			return message
 		})
+
+		p.drained = len(messages) == 0
+
+		if p.drained {
+			select {
+			case p.onDrained <- true: // sent successfully
+			default: // No receiver, ignore
+			}
+
+			continue
+		}
 
 		p.messages = append(p.messages, messages...)
 
@@ -231,8 +241,6 @@ func (p *producer) sendPartitionedMessages() {
 			continue
 		}
 
-		fmt.Printf("Sending %d messages to processor '%s'\n", len(partition), processorId)
-
 		ok = request.Reply(partition)
 		if !ok {
 			continue
@@ -251,7 +259,7 @@ func (p *producer) sendPartitionedMessages() {
 
 }
 
-// Terminate stops the producer and releases all resources.
+// Terminate closes pending requests and stops the producer.
 // After calling Terminate, the producer will no longer accept new requests.
 func (p *producer) Terminate() {
 	p.mu.Lock()
@@ -263,4 +271,16 @@ func (p *producer) Terminate() {
 
 	p.terminated = true
 	close(p.requestChan)
+}
+
+func (p *producer) OnDrained() <-chan bool {
+	return p.onDrained
+}
+
+func (p *producer) OnTerminated() <-chan any {
+	return p.onTerminated
+}
+
+func (p *producer) IsDrained() bool {
+	return p.drained
 }

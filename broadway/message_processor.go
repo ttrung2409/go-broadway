@@ -45,10 +45,13 @@ type messageProcessor struct {
 	config          MessageProcessorConfig
 	messages        *concurrentQueue[*Message]
 	pendingRequests *concurrentMap[string, *request]
-	producers       map[string]*producer
-	batchers        map[string]*batcher
+	producers       *concurrentMap[string, *producer]
+	batchers        *concurrentMap[string, *batcher]
+	paused          bool
 	terminated      bool
 	mu              sync.RWMutex
+
+	onTerminated chan any
 }
 
 // newMessageProcessor creates a new message processor with the given configuration,
@@ -82,8 +85,9 @@ func newMessageProcessor(
 		messages:         newConcurrentQueue[*Message](),
 		pendingRequests:  newConcurrentMap[string, *request](),
 		mu:               sync.RWMutex{},
-		producers:        producers,
-		batchers:         batchers,
+		producers:        newConcurrentMap(producers),
+		batchers:         newConcurrentMap(batchers),
+		onTerminated:     make(chan any),
 	}
 }
 
@@ -92,12 +96,7 @@ func newMessageProcessor(
 //
 // Parameters:
 //   - ctx: The context provided when starting the pipeline.
-//
-// Returns:
-//   - A channel that will receive a value (possibly an error) when the processor terminates.
-func (p *messageProcessor) Run(ctx context.Context) <-chan any {
-
-	onTerminated := make(chan any)
+func (p *messageProcessor) Run(ctx context.Context) {
 
 	go func() {
 		defer func() {
@@ -116,8 +115,9 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 				return true
 			})
 
-			onTerminated <- r
-			close(onTerminated)
+			p.onTerminated <- r
+			close(p.onTerminated)
+			p.onTerminated = nil
 		}()
 
 		for {
@@ -133,7 +133,7 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 			messages, ok := p.messages.DequeueMany(count)
 
 			if !ok {
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 100)
 				continue
 			}
 
@@ -141,10 +141,9 @@ func (p *messageProcessor) Run(ctx context.Context) <-chan any {
 		}
 	}()
 
-	return onTerminated
 }
 
-// Terminate stops the message processor and releases all resources.
+// Terminate flushes all remaining messages in the queue and stop the message processor.
 // After calling Terminate, the processor will no longer process new messages.
 func (p *messageProcessor) Terminate() {
 	p.mu.Lock()
@@ -155,6 +154,19 @@ func (p *messageProcessor) Terminate() {
 	}
 
 	p.terminated = true
+}
+
+func (p *messageProcessor) Pause() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paused = true
+}
+
+// Resume allows the batch processor to accept new batches after being paused.
+func (p *messageProcessor) Resume() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paused = false
 }
 
 // flush processes any remaining messages in the queue before shutdown.
@@ -201,20 +213,20 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 			processedMessage.BatchKey = processedMessage.PartitionKey()
 		}
 
-		if (p.batchers == nil || err != nil) && processedMessage.Ack() != nil {
+		if (p.batchers.Len() == 0 || err != nil) && processedMessage.Ack() != nil {
 			processedMessage.Ack()([]*Message{processedMessage}, err)
 		}
 
 		return processedMessage
 	})
 
-	if p.batchers != nil {
+	if p.batchers.Len() > 0 {
 		messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
 			return message.Batcher
 		})
 
 		for batcherName, messagesInBatcher := range messagesByBatchers {
-			if batcher, ok := p.batchers[batcherName]; ok {
+			if batcher, ok := p.batchers.Get(batcherName); ok {
 				batcher.Send(messagesInBatcher)
 			}
 		}
@@ -226,7 +238,7 @@ func (p *messageProcessor) request() {
 
 	demand := p.config.MaxDemand - p.config.MinDemand
 
-	for producerId, producer := range p.producers {
+	for producerId, producer := range p.producers.ToMap() {
 		if r, ok := p.pendingRequests.Get(producerId); ok {
 			if r.IsClosed() {
 				p.pendingRequests.Delete(producerId)
@@ -234,8 +246,6 @@ func (p *messageProcessor) request() {
 				continue
 			}
 		}
-
-		fmt.Printf("requesting %d messages \n", demand)
 
 		r := newRequest(p.Id, demand)
 
@@ -261,7 +271,7 @@ func (p *messageProcessor) request() {
 // Parameters:
 //   - producers: A map of producer IDs to producer instances.
 func (p *messageProcessor) SetProducers(producers map[string]*producer) {
-	p.producers = producers
+	p.producers.Reset(producers)
 }
 
 // SetBatchers assigns a map of batchers to this message processor.
@@ -270,7 +280,7 @@ func (p *messageProcessor) SetProducers(producers map[string]*producer) {
 // Parameters:
 //   - batchers: A map of batcher names to batcher instances.
 func (p *messageProcessor) SetBatchers(batchers map[string]*batcher) {
-	p.batchers = batchers
+	p.batchers.Reset(batchers)
 }
 
 // ToString returns a string representation of this message processor.
@@ -280,4 +290,12 @@ func (p *messageProcessor) SetBatchers(batchers map[string]*batcher) {
 //   - The unique ID of the message processor.
 func (p *messageProcessor) ToString() string {
 	return p.Id
+}
+
+func (p *messageProcessor) OnTerminated() <-chan any {
+	return p.onTerminated
+}
+
+func (p *messageProcessor) IsTerminated() bool {
+	return p.onTerminated == nil
 }
