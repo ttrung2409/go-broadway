@@ -15,7 +15,11 @@ type producerSupervisor struct {
 	onAllProducersDrained    chan bool
 }
 
-func newProducerSupervisor(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producerSupervisor {
+func newProducerSupervisor(
+	config ProducerConfig,
+	messageProcessorResolver messageProcessorResolver,
+	messageAck Acknowledger,
+) *producerSupervisor {
 	return &producerSupervisor{
 		config:                   config,
 		producers:                newConcurrentMap[string, *producer](),

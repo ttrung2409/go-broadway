@@ -51,7 +51,11 @@ type producer struct {
 	onTerminated             chan any
 }
 
-func newProducer(config ProducerConfig, messageProcessorResolver messageProcessorResolver, messageAck Acknowledger) *producer {
+func newProducer(
+	config ProducerConfig,
+	messageProcessorResolver messageProcessorResolver,
+	messageAck Acknowledger,
+) *producer {
 
 	if config.Concurrency == 0 {
 		config.Concurrency = 1
@@ -160,7 +164,9 @@ func (p *producer) processRequests() {
 				partitionKey = p.config.partitionKeyResolver(payload)
 			}
 
-			message := newMessage(messageArgs{payload: payload, ack: p.messageAck, partitionKey: partitionKey})
+			message := newMessage(
+				messageArgs{payload: payload, ack: p.messageAck, partitionKey: partitionKey},
+			)
 
 			return message
 		})

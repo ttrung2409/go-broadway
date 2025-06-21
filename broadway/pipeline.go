@@ -18,11 +18,11 @@ type PartitionKeyResolver func(payload MessagePayload) string
 
 // PipelineConfig defines the configuration for a Broadway pipeline.
 type PipelineConfig struct {
-	Producer             ProducerConfig
-	MessageProcessor     MessageProcessorConfig
-	Batchers             []BatcherConfig
-	PartitionKeyResolver PartitionKeyResolver
-	Acknowledger         Acknowledger
+	Producer         ProducerConfig
+	MessageProcessor MessageProcessorConfig
+	Batchers         []BatcherConfig
+	PartitionBy      PartitionKeyResolver
+	Acknowledger     Acknowledger
 }
 
 // Pipeline represents a Broadway processing pipeline that manages the
@@ -43,7 +43,11 @@ type Pipeline struct {
 // Returns:
 //   - A new Pipeline instance
 func NewPipeline(config PipelineConfig) *Pipeline {
-	return &Pipeline{config: config, onProducerDrained: make(chan bool), onTerminated: make(chan bool)}
+	return &Pipeline{
+		config:            config,
+		onProducerDrained: make(chan bool),
+		onTerminated:      make(chan bool),
+	}
 }
 
 // Run starts the pipeline in a goroutine with the provided context.
@@ -56,10 +60,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 		messageProcessorSupervisor := newMessageProcessorSupervisor(p.config.MessageProcessor)
 
 		producerConfig := p.config.Producer
-		producerConfig.partitionKeyResolver = p.config.PartitionKeyResolver
-		producerSupervisor := newProducerSupervisor(producerConfig, func(partitionKey string) (string, bool) {
-			return messageProcessorSupervisor.Resolve(partitionKey)
-		}, p.config.Acknowledger)
+		producerConfig.partitionKeyResolver = p.config.PartitionBy
+		producerSupervisor := newProducerSupervisor(
+			producerConfig,
+			func(partitionKey string) (string, bool) {
+				return messageProcessorSupervisor.Resolve(partitionKey)
+			},
+			p.config.Acknowledger,
+		)
 
 		producers := producerSupervisor.Run(ctx)
 

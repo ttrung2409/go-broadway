@@ -64,7 +64,12 @@ func (s *messageProcessorSupervisor) Terminate() {
 	}
 }
 
-func (s *messageProcessorSupervisor) handleProcessorPanic(processor *messageProcessor, producers map[string]*producer, batchers map[string]*batcher, ctx context.Context) {
+func (s *messageProcessorSupervisor) handleProcessorPanic(
+	processor *messageProcessor,
+	producers map[string]*producer,
+	batchers map[string]*batcher,
+	ctx context.Context,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
