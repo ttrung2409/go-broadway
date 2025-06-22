@@ -144,7 +144,6 @@ func (b *batcher) Terminate() {
 // Returns:
 //   - true if the messages were accepted, false otherwise
 func (b *batcher) Send(messages []*Message) bool {
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -167,9 +166,8 @@ func (b *batcher) flush() {
 		}
 	}()
 
-	count := 0
-
 	for {
+
 		b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
 			if batch, ok := messages.DequeueAll(); ok {
 				if b.processBatch(batchKey, batch) {
@@ -186,12 +184,6 @@ func (b *batcher) flush() {
 
 		if b.messages.Len() == 0 {
 			return
-		}
-
-		count++
-
-		if count > 10 {
-			panic("Failed to flush all messages in batcher after multiple attempts")
 		}
 
 		time.Sleep(time.Millisecond * 100)
@@ -225,7 +217,6 @@ func (b *batcher) processBatches() {
 			})
 
 		default:
-
 			// Check for any batches that have reached the batch size threshold
 			hasBatchesReachedThreshold := false
 			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {

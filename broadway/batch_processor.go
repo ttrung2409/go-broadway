@@ -70,7 +70,6 @@ func (p *batchProcessor) Run(ctx context.Context) {
 		}()
 
 		for messages := range p.receiver {
-			fmt.Println("Processing batch of messages in batch processor", messages[0].BatchKey)
 
 			func(messages []*Message) {
 				defer p.mu.Unlock()

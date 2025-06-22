@@ -34,7 +34,7 @@ func Run() {
 				Processor:    &UserSessionTracker{},
 			},
 		},
-		PartitionKeyResolver: func(payload broadway.MessagePayload) string {
+		PartitionBy: func(payload broadway.MessagePayload) string {
 			if activity, ok := payload.(UserActivity); ok {
 				return activity.UserID
 			}

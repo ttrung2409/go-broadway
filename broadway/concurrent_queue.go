@@ -56,27 +56,27 @@ func (q *concurrentQueue[T]) Dequeue() (T, bool) {
 	return item, true
 }
 
-// DequeueMany removes and returns up to 'count' items from the queue.
-// If the queue contains fewer than 'count' items, all available items are returned.
+// DequeueMany removes and returns up to 'total' items from the queue.
+// If the queue contains fewer than 'total' items, all available items are returned.
 //
 // Parameters:
-//   - count: The maximum number of items to dequeue
+//   - total: The maximum number of items to dequeue
 //
 // Returns:
 //   - A slice containing the dequeued items (may be fewer than requested)
 //   - true if at least one item was dequeued, false otherwise
-func (q *concurrentQueue[T]) DequeueMany(count int) ([]T, bool) {
+func (q *concurrentQueue[T]) DequeueMany(total int) ([]T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if len(q.queue) < count {
+	if len(q.queue) < total {
 		items := q.queue
 		q.queue = make([]T, 0)
 		return items, len(items) > 0
 	}
 
-	items := q.queue[:count]
-	q.queue = q.queue[count:]
+	items := q.queue[:total]
+	q.queue = q.queue[total:]
 	return items, len(items) > 0
 }
 
