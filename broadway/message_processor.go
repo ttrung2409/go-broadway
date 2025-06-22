@@ -3,6 +3,7 @@ package broadway
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -104,6 +105,9 @@ func (p *messageProcessor) Run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("message processor panicked: %v\n", r)
+				fmt.Println(string(debug.Stack()))
+
+				p.flushAndFailAll(r)
 				p.Terminate()
 			} else {
 				p.flush(ctx)
@@ -186,6 +190,17 @@ func (p *messageProcessor) flush(ctx context.Context) {
 	}
 }
 
+func (p *messageProcessor) flushAndFailAll(r any) {
+	messages := p.messages.ToSlice()
+	if len(messages) == 0 {
+		return
+	}
+
+	if ack := messages[0].Ack(); ack != nil {
+		ack(messages, fmt.Errorf("message processor %s panicked %v", p.Id, r))
+	}
+}
+
 // process handles a batch of messages by passing messages to the configured processor.
 // It then routes them to the appropriate batchers according to their batcher and batch key,
 // or acknowledges them if no batcher is defined.
@@ -231,14 +246,44 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 	})
 
 	if hasBatchers {
+		p.sendToBatcher(messages)
+	}
+}
 
-		messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
-			return message.Batcher
-		})
+func (p *messageProcessor) sendToBatcher(messages []*Message) {
+	messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
+		return message.Batcher
+	})
 
-		for batcherName, messagesInBatcher := range messagesByBatchers {
-			if batcher, ok := p.batchers.Get(batcherName); ok {
-				batcher.Send(messagesInBatcher)
+	const maxAttempts = 10
+
+	for batcherName, messagesInBatcher := range messagesByBatchers {
+		if batcher, ok := p.batchers.Get(batcherName); ok {
+			attempts := 0
+
+			for {
+				if attempts > maxAttempts {
+					if ack := messagesInBatcher[0].Ack(); ack != nil {
+						ack(
+							messagesInBatcher,
+							fmt.Errorf(
+								"failed to send messages to batcher %s after %d attempts",
+								batcherName,
+								maxAttempts,
+							),
+						)
+					}
+
+					break
+				}
+
+				if ok := batcher.Send(messagesInBatcher); ok {
+					break
+				}
+
+				attempts++
+
+				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}

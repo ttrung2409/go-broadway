@@ -54,31 +54,32 @@ func newBatchProcessor(p BatchProcessor) *batchProcessor {
 func (p *batchProcessor) Run(ctx context.Context) {
 
 	go func() {
-		defer func() {
-			p.terminated = true
-
-			r := recover()
-
-			if r != nil {
-				fmt.Printf("batch processor panicked: %v\n", r)
-				fmt.Println(string(debug.Stack()))
-				close(p.receiver)
-			}
-
-			p.onTerminated <- r
-			close(p.onTerminated)
-		}()
-
 		for messages := range p.receiver {
-
 			func(messages []*Message) {
-				defer p.mu.Unlock()
+				defer func() {
+					p.mu.Unlock()
+
+					r := recover()
+
+					if r != nil {
+						fmt.Printf("batch processor %s panicked: %v\n", p.Id, r)
+						fmt.Println(string(debug.Stack()))
+
+						if ack := messages[0].Ack(); ack != nil {
+							ack(messages,
+								fmt.Errorf("batch processor %s panicked: %v", p.Id, r))
+						}
+
+						p.Terminate()
+					}
+				}()
 
 				processedMessages, err := p.Handle(messages, ctx)
 
 				if ack := messages[0].Ack(); ack != nil {
 					ack(processedMessages, err)
 				}
+
 			}(messages)
 		}
 	}()

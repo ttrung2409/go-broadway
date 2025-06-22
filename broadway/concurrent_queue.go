@@ -114,3 +114,12 @@ func (q *concurrentQueue[T]) Len() int {
 
 	return len(q.queue)
 }
+
+func (q *concurrentQueue[T]) ToSlice() []T {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	snapshot := make([]T, len(q.queue))
+	copy(snapshot, q.queue)
+	return snapshot
+}

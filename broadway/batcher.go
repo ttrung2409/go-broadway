@@ -3,6 +3,7 @@ package broadway
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -89,6 +90,9 @@ func (b *batcher) Run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("batcher panicked: %v\n", r)
+				fmt.Println(string(debug.Stack()))
+
+				b.flushAndFailAll(r)
 				b.Terminate()
 			} else {
 				b.flush()
@@ -187,6 +191,20 @@ func (b *batcher) flush() {
 		}
 
 		time.Sleep(time.Millisecond * 100)
+	}
+}
+
+func (b *batcher) flushAndFailAll(r any) {
+	for _, messages := range b.messages.Values() {
+		msgs := messages.ToSlice()
+
+		if len(msgs) == 0 {
+			continue
+		}
+
+		if ack := msgs[0].Ack(); ack != nil {
+			ack(msgs, fmt.Errorf("batcher %s panicked: %v", b.config.Name, r))
+		}
 	}
 }
 
