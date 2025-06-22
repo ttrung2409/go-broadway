@@ -31,6 +31,7 @@ type PipelineConfig struct {
 // message processing with proper partitioning, batching, and acknowledgment.
 type Pipeline struct {
 	config            PipelineConfig
+	terminated        bool
 	onProducerDrained chan bool
 	onTerminated      chan bool
 }
@@ -77,31 +78,22 @@ func (p *Pipeline) Run(ctx context.Context) {
 		messageProcessorSupervisor.Run(ctx, producers, batchers)
 
 		go func() {
-			allMessageProcessorsTerminated := false
-			allBatchersTerminated := false
-
-			if len(p.config.Batchers) == 0 {
-				allBatchersTerminated = true
-			}
+			defer func() {
+				close(p.onProducerDrained)
+			}()
 
 			for {
-				if allBatchersTerminated && allMessageProcessorsTerminated {
-					p.terminate()
+				if p.terminated {
 					return
 				}
 
 				select {
 				case producers := <-producerSupervisor.OnProducersChange():
 					messageProcessorSupervisor.SetProducers(producers)
-				case batcherInstances := <-batcherSupervisor.OnBatchersChange():
-					messageProcessorSupervisor.SetBatchers(batcherInstances)
+				case batchers := <-batcherSupervisor.OnBatchersChange():
+					messageProcessorSupervisor.SetBatchers(batchers)
 				case <-producerSupervisor.OnAllProducersDrained():
 					p.onProducerDrained <- true
-				case <-messageProcessorSupervisor.OnAllProcessorsTerminated():
-					allMessageProcessorsTerminated = true
-				case <-batcherSupervisor.OnAllBatchersTerminated():
-					allBatchersTerminated = true
-
 				}
 			}
 		}()
@@ -110,13 +102,20 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 		producerSupervisor.Terminate()
 		messageProcessorSupervisor.Terminate()
-		batcherSupervisor.Terminate()
+		<-messageProcessorSupervisor.OnAllProcessorsTerminated()
 
+		if batchers != nil {
+			batcherSupervisor.Terminate()
+			<-batcherSupervisor.OnAllBatchersTerminated()
+		}
+
+		p.terminate()
 	}()
 }
 
 func (p *Pipeline) terminate() {
-	close(p.onProducerDrained)
+	p.terminated = true
+	p.onTerminated <- true
 	close(p.onTerminated)
 }
 
