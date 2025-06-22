@@ -69,10 +69,9 @@ func newBatcher(config BatcherConfig) *batcher {
 // Parameters:
 //   - ctx: The context provided when starting the pipeline
 func (b *batcher) Run(ctx context.Context) {
-
 	for i := 0; i < b.config.Concurrency; i++ {
 		processor := newBatchProcessor(b.config.Processor)
-		processor.Run(ctx)
+		processor.Run(context.WithValue(ctx, BatcherContextKey, b.config.Name))
 		b.hr.AddNode(processor)
 
 		go func(p *batchProcessor) {
