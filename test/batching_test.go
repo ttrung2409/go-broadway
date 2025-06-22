@@ -3,42 +3,63 @@ package test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/ttrung2409/go-broadway/broadway"
 )
 
 type batchingTestMessage struct {
 	UserId                    string
 	Action                    string
+	BatchedBy                 string
 	HandledByBatchProcessorId string
+	Tenant                    string
+	Order                     int
 }
 
 type batchingTestProducer struct {
-	Count int
+	count int
 }
 
 func (p *batchingTestProducer) New() broadway.Producer {
 	return &batchingTestProducer{}
 }
 
-func (p *batchingTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
-	const numOfMessages = 100
+const batchingTestTotalMessages = 100
+const batchingTestTotalUsers = 10
 
+func (p *batchingTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
 	result := make([]broadway.MessagePayload, 0)
 	actions := []string{"view", "click", "purchase"}
 
-	if p.Count > numOfMessages {
+	if p.count > batchingTestTotalMessages {
 		return []broadway.MessagePayload{}
 	}
 
-	for i := 0; i < min(numOfMessages-p.Count, demand); i++ {
-		result = append(result, &batchingTestMessage{UserId: fmt.Sprintf("User%d", (i+1+p.Count)%5), Action: actions[(i+1+p.Count)%len(actions)]})
+	demand = min(demand, batchingTestTotalMessages-p.count)
+
+	userIds := make([]string, 0)
+	for i := 0; i < batchingTestTotalUsers; i++ {
+		userIds = append(userIds, uuid.NewString())
 	}
 
-	p.Count += min(numOfMessages-p.Count, demand)
+	for i := 0; i < demand; i++ {
+		result = append(
+			result,
+			&batchingTestMessage{
+				UserId: userIds[p.count%batchingTestTotalUsers],
+				Action: actions[p.count%len(actions)],
+				Tenant: fmt.Sprintf("tenant %d", p.count%2),
+				Order:  p.count,
+			},
+		)
+
+		p.count++
+	}
 
 	return result
 }
@@ -50,7 +71,10 @@ func (p *batchingTestMessageProcessor) New() broadway.MessageProcessor {
 	return &batchingTestMessageProcessor{}
 }
 
-func (p *batchingTestMessageProcessor) Handle(message *broadway.Message, ctx context.Context) (*broadway.Message, error) {
+func (p *batchingTestMessageProcessor) Handle(
+	message *broadway.Message,
+	ctx context.Context,
+) (*broadway.Message, error) {
 	message.BatchKey = message.Payload.(*batchingTestMessage).UserId
 
 	return message, nil
@@ -66,7 +90,10 @@ func (p *batchingTestBatchProcessor) New() broadway.BatchProcessor {
 	}
 }
 
-func (p *batchingTestBatchProcessor) Handle(messages []*broadway.Message, ctx context.Context) ([]*broadway.Message, error) {
+func (p *batchingTestBatchProcessor) Handle(
+	messages []*broadway.Message,
+	ctx context.Context,
+) ([]*broadway.Message, error) {
 	for _, message := range messages {
 		message.Payload.(*batchingTestMessage).HandledByBatchProcessorId = p.Id
 	}
@@ -75,21 +102,30 @@ func (p *batchingTestBatchProcessor) Handle(messages []*broadway.Message, ctx co
 }
 
 func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
-	batchProcessorsByUser := make(map[string]string)
+	batchProcessorsByBatchKey := make(map[string]string)
+	mu := &sync.Mutex{}
 
 	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
 		for _, message := range messages {
 			payload := message.Payload.(*batchingTestMessage)
-			userId := payload.UserId
+			batchKey := payload.UserId
 			batchProcessorId := payload.HandledByBatchProcessorId
 
-			if existingBatchProcessorId, ok := batchProcessorsByUser[userId]; ok {
-				if existingBatchProcessorId != batchProcessorId {
-					t.Errorf("Batch key %s was handled by multiple batch processors: %s and %s",
-						userId, existingBatchProcessorId, batchProcessorId)
-				}
+			if existingBatchProcessorId, ok := batchProcessorsByBatchKey[batchKey]; ok {
+				assert.Equal(
+					t,
+					existingBatchProcessorId,
+					batchProcessorId,
+					"Batch key %s was handled by multiple batch processors: %s and %s",
+					batchKey,
+					existingBatchProcessorId,
+					batchProcessorId,
+				)
 			} else {
-				batchProcessorsByUser[userId] = batchProcessorId
+				batchProcessorsByBatchKey[batchKey] = batchProcessorId
 			}
 		}
 	}
@@ -102,11 +138,170 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 		MessageProcessor: broadway.MessageProcessorConfig{
 			Processor:   &batchingTestMessageProcessor{},
 			Concurrency: 5,
-			MinDemand:   5,
-			MaxDemand:   10,
+			MinDemand:   1,
+			MaxDemand:   100,
 		},
 		Batchers: []broadway.BatcherConfig{
-			{Concurrency: 5, Processor: &batchingTestBatchProcessor{}, BatchSize: 10, BatchTimeout: 1 * time.Second},
+			{
+				Concurrency:  5,
+				Processor:    &batchingTestBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+}
+
+func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
+	lastProcessedMessageByBatchKey := make(map[string]*broadway.Message)
+	mu := &sync.Mutex{}
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, message := range messages {
+			payload := message.Payload.(*batchingTestMessage)
+			batchKey := payload.UserId
+
+			if lastMessage, ok := lastProcessedMessageByBatchKey[batchKey]; ok {
+				assert.Less(
+					t,
+					lastMessage.Payload.(*batchingTestMessage).Order,
+					payload.Order,
+					"messages with batch key %s were processed out of order: %d before %d",
+					batchKey,
+					lastMessage.Payload.(*batchingTestMessage).Order,
+					payload.Order,
+				)
+			}
+
+			lastProcessedMessageByBatchKey[batchKey] = message
+		}
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &batchingTestProducer{},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &batchingTestMessageProcessor{},
+			Concurrency: 1,
+			MinDemand:   1,
+			MaxDemand:   100,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &batchingTestBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+}
+
+type multiBatcherMessageProcessor struct {
+}
+
+func (p *multiBatcherMessageProcessor) New() broadway.MessageProcessor {
+	return &multiBatcherMessageProcessor{}
+}
+
+func (p *multiBatcherMessageProcessor) Handle(
+	message *broadway.Message,
+	ctx context.Context,
+) (*broadway.Message, error) {
+	message.BatchKey = message.Payload.(*batchingTestMessage).UserId
+	message.Batcher = message.Payload.(*batchingTestMessage).Tenant
+
+	return message, nil
+}
+
+type multiBatcherBatchProcessor struct {
+	Id string
+}
+
+func (p *multiBatcherBatchProcessor) New() broadway.BatchProcessor {
+	return &multiBatcherBatchProcessor{Id: uuid.NewString()}
+}
+
+func (p *multiBatcherBatchProcessor) Handle(
+	messages []*broadway.Message,
+	ctx context.Context,
+) ([]*broadway.Message, error) {
+	for _, message := range messages {
+		payload := message.Payload.(*batchingTestMessage)
+		payload.HandledByBatchProcessorId = p.Id
+		payload.BatchedBy = ctx.Value(broadway.BatcherContextKey).(string)
+	}
+
+	return messages, nil
+}
+
+func TestMessagesRoutedToSameBatcher(t *testing.T) {
+	acknowledger := func(messages []*broadway.Message, err error) {
+		for _, message := range messages {
+			assert.Equal(
+				t,
+				message.Batcher,
+				message.Payload.(*batchingTestMessage).BatchedBy,
+				"message of %s is supposed to be routed to batcher %s, but was routed to %s",
+				message.Payload.(*batchingTestMessage).Tenant,
+				message.Batcher,
+				message.Payload.(*batchingTestMessage).BatchedBy,
+			)
+		}
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &batchingTestProducer{},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &multiBatcherMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   100,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Name:         "tenant 0",
+				Concurrency:  5,
+				Processor:    &multiBatcherBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+			{
+				Name:         "tenant 1",
+				Concurrency:  5,
+				Processor:    &multiBatcherBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
 		},
 		Acknowledger: acknowledger,
 	})

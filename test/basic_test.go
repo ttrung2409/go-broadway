@@ -5,53 +5,112 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/ttrung2409/go-broadway/broadway"
 )
 
 type basicTestMessage struct {
 	Id         string
+	UserId     string
 	ShouldFail bool
 }
 
 type basicTestProducer struct {
-	Count int
+	totalFailed   int
+	producedCount int
+	failedCount   int
 }
 
 func (p *basicTestProducer) New() broadway.Producer {
-	return &basicTestProducer{}
+	return &basicTestProducer{totalFailed: p.totalFailed}
 }
 
-const numOfMessages = 100
+const basicTestTotalMessages = 100
+const basicTestTotalUsers = 10
 
 func (p *basicTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
+
 	result := make([]broadway.MessagePayload, 0)
 
-	if p.Count > numOfMessages {
+	if p.producedCount >= basicTestTotalMessages {
 		return []broadway.MessagePayload{}
 	}
 
-	for i := 0; i < min(numOfMessages-p.Count, demand); i++ {
-		result = append(result, basicTestMessage{Id: fmt.Sprintf("Message %d", i+1+p.Count), ShouldFail: (i+1+p.Count)%2 == 0})
+	demand = min(demand, basicTestTotalMessages-p.producedCount)
+
+	userIds := make([]string, 0)
+	for i := 0; i < basicTestTotalUsers; i++ {
+		userIds = append(userIds, uuid.NewString())
 	}
 
-	p.Count += min(numOfMessages-p.Count, demand)
+	for i := 0; i < demand; i++ {
+		failed := p.producedCount%2 == 0
+
+		result = append(
+			result,
+			basicTestMessage{
+				Id:         fmt.Sprintf("message %d", p.producedCount),
+				UserId:     userIds[p.producedCount%basicTestTotalUsers],
+				ShouldFail: p.failedCount < p.totalFailed && failed,
+			},
+		)
+
+		if p.failedCount < p.totalFailed && failed {
+			p.failedCount++
+		}
+
+		p.producedCount++
+
+	}
 
 	return result
 }
 
-type basicTestProcessor struct{}
+type basicTestMessageProcessor struct{}
 
-func (p *basicTestProcessor) New() broadway.MessageProcessor {
-	return &basicTestProcessor{}
+func (p *basicTestMessageProcessor) New() broadway.MessageProcessor {
+	return &basicTestMessageProcessor{}
 }
 
-func (p *basicTestProcessor) Handle(message *broadway.Message, ctx context.Context) (*broadway.Message, error) {
+func (p *basicTestMessageProcessor) Handle(
+	message *broadway.Message,
+	ctx context.Context,
+) (*broadway.Message, error) {
 	if message.Payload.(basicTestMessage).ShouldFail {
-		return nil, fmt.Errorf("processing failed for message: %s", message.Payload.(basicTestMessage).Id)
+		return nil, fmt.Errorf(
+			"processing failed for message: %s",
+			message.Payload.(basicTestMessage).Id,
+		)
 	}
 
+	message.BatchKey = message.Payload.(basicTestMessage).UserId
+
 	return message, nil
+}
+
+type basicTestBatchProcessor struct{}
+
+func (p *basicTestBatchProcessor) New() broadway.BatchProcessor {
+	return &basicTestBatchProcessor{}
+}
+
+func (p *basicTestBatchProcessor) Handle(
+	messages []*broadway.Message,
+	ctx context.Context,
+) ([]*broadway.Message, error) {
+	for _, message := range messages {
+		if message.Payload.(basicTestMessage).ShouldFail {
+			return nil, fmt.Errorf(
+				"batch processing failed for message: %s",
+				message.Payload.(basicTestMessage).Id,
+			)
+		}
+	}
+
+	return messages, nil
 }
 
 func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
@@ -74,14 +133,14 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 
 	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
 		Producer: broadway.ProducerConfig{
-			Producer:    &basicTestProducer{},
+			Producer:    &basicTestProducer{totalFailed: basicTestTotalMessages / 2},
 			Concurrency: 1,
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
-			Processor:   &basicTestProcessor{},
+			Processor:   &basicTestMessageProcessor{},
 			Concurrency: 5,
-			MinDemand:   5,
-			MaxDemand:   10,
+			MinDemand:   1,
+			MaxDemand:   100,
 		},
 		Acknowledger: acknowledger,
 	})
@@ -96,14 +155,60 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
-	expectedSuccess := numOfMessages / 2
-	expectedFailures := numOfMessages / 2
+	assert.Equal(t, basicTestTotalMessages/2, successfulCount)
+	assert.Equal(t, basicTestTotalMessages/2, failedCount)
+}
 
-	if successfulCount != expectedSuccess {
-		t.Errorf("Expected %d successful messages, got %d", expectedSuccess, successfulCount)
+func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
+	var (
+		successfulCount int
+		failedCount     int
+		mu              sync.Mutex
+	)
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if err != nil {
+			failedCount += len(messages)
+		} else {
+			successfulCount += len(messages)
+		}
 	}
 
-	if failedCount != expectedFailures {
-		t.Errorf("Expected %d failed messages, got %d", expectedFailures, failedCount)
-	}
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &basicTestProducer{totalFailed: basicTestTotalMessages / 2},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &basicTestMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   100,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &basicTestBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+	assert.Equal(t, basicTestTotalMessages/2, successfulCount)
+	assert.Equal(t, basicTestTotalMessages/2, failedCount)
 }
