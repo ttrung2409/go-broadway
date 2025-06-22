@@ -129,8 +129,8 @@ func (p *messageProcessor) Run(ctx context.Context) {
 				p.request()
 			}
 
-			count := min((p.config.MaxDemand+p.config.MinDemand)/2, p.messages.Len())
-			messages, ok := p.messages.DequeueMany(count)
+			total := min((p.config.MaxDemand+p.config.MinDemand)/2, p.messages.Len())
+			messages, ok := p.messages.DequeueMany(total)
 
 			if !ok {
 				time.Sleep(time.Millisecond * 100)
@@ -194,6 +194,8 @@ func (p *messageProcessor) flush(ctx context.Context) {
 //   - messages: A slice of messages to be processed.
 //   - ctx: The context provided when starting the pipeline.
 func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
+	hasBatchers := p.batchers.Len() > 0
+
 	messages = lo.Map(messages, func(message *Message, _ int) *Message {
 		processedMessage, err := p.Handle(message, ctx)
 
@@ -213,14 +215,23 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) {
 			processedMessage.BatchKey = processedMessage.PartitionKey()
 		}
 
-		if (p.batchers.Len() == 0 || err != nil) && processedMessage.Ack() != nil {
+		if (!hasBatchers || err != nil) && processedMessage.Ack() != nil {
 			processedMessage.Ack()([]*Message{processedMessage}, err)
+		}
+
+		if err != nil {
+			return nil
 		}
 
 		return processedMessage
 	})
 
-	if p.batchers.Len() > 0 {
+	messages = lo.Filter(messages, func(message *Message, _ int) bool {
+		return message != nil
+	})
+
+	if hasBatchers {
+
 		messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
 			return message.Batcher
 		})
