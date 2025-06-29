@@ -113,11 +113,9 @@ func (p *messageProcessor) Run(ctx context.Context) {
 				p.flush(ctx)
 			}
 
-			p.pendingRequests.ForEach(func(_ string, request *request) bool {
+			for _, request := range p.pendingRequests.Values() {
 				request.Close()
-
-				return true
-			})
+			}
 
 			p.onTerminated <- r
 			close(p.onTerminated)

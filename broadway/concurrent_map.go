@@ -62,24 +62,6 @@ func (m *concurrentMap[K, V]) Len() int {
 	return len(m.data)
 }
 
-// ForEach safely iterates over each key-value pair in the map
-// and applies the provided function. If the function returns false,
-// the iteration stops early.
-func (m *concurrentMap[K, V]) ForEach(fn func(K, V) bool) {
-	m.mu.RLock()
-	snapshot := make(map[K]V)
-	for k, v := range m.data {
-		snapshot[k] = v
-	}
-	m.mu.RUnlock()
-
-	for k, v := range snapshot {
-		if !fn(k, v) {
-			break
-		}
-	}
-}
-
 func (m *concurrentMap[K, V]) ToMap() map[K]V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

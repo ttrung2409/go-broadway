@@ -50,21 +50,6 @@ func (s *concurrentSlice[T]) Shift() (T, bool) {
 	return item, true
 }
 
-// ForEach applies a function to each item in the slice.
-//
-// Parameters:
-//   - do: A function to apply to each item in the slice
-func (s *concurrentSlice[T]) ForEach(do func(item T)) {
-	s.mu.RLock()
-	snapshot := make([]T, len(s.items))
-	copy(snapshot, s.items)
-	s.mu.RUnlock()
-
-	for _, item := range snapshot {
-		do(item)
-	}
-}
-
 // Filter removes items from the slice that don't satisfy the predicate function.
 // It returns a new slice containing only the items that satisfy the predicate.
 //
@@ -183,4 +168,14 @@ func (s *concurrentSlice[T]) Remove(item T) bool {
 	}
 
 	return false
+}
+
+func (s *concurrentSlice[T]) ToSlice() []T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]T, len(s.items))
+	copy(items, s.items)
+
+	return items
 }

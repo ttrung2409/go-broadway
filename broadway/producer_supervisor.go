@@ -53,13 +53,11 @@ func (s *producerSupervisor) Run(
 				case <-p.OnDrained():
 					allDrained := true
 
-					s.producers.ForEach(func(_ string, producer *producer) bool {
+					for _, producer := range s.producers.Values() {
 						if !producer.IsDrained() {
 							allDrained = false
 						}
-
-						return true
-					})
+					}
 
 					if allDrained {
 						select {

@@ -147,9 +147,9 @@ func (p *producer) processRequests() {
 		})
 
 		totalDemand := 0
-		p.requests.ForEach(func(request *request) {
+		for _, request := range p.requests.ToSlice() {
 			totalDemand += request.Demand
-		})
+		}
 
 		if totalDemand == 0 {
 			continue

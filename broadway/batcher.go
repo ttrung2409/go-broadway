@@ -170,8 +170,7 @@ func (b *batcher) flush() {
 	}()
 
 	for {
-
-		b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
+		for batchKey, messages := range b.messages.ToMap() {
 			if batch, ok := messages.DequeueAll(); ok {
 				if b.processBatch(batchKey, batch) {
 					b.messages.Delete(batchKey)
@@ -181,9 +180,7 @@ func (b *batcher) flush() {
 			} else {
 				b.messages.Delete(batchKey)
 			}
-
-			return true
-		})
+		}
 
 		if b.messages.Len() == 0 {
 			return
@@ -222,39 +219,29 @@ func (b *batcher) processBatches() {
 
 		select {
 		case <-ticker.C:
-
-			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
+			for batchKey, messages := range b.messages.ToMap() {
 				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
 					if !b.processBatch(batchKey, batch) {
 						messages.Prepend(batch...)
 					}
 				}
-
-				return true
-			})
+			}
 
 		default:
 			// Check for any batches that have reached the batch size threshold
-			hasBatchesReachedThreshold := false
-			b.messages.ForEach(func(batchKey string, messages *concurrentQueue[*Message]) bool {
-				if messages.Len() < b.config.BatchSize {
-					return true
-				}
-
-				hasBatchesReachedThreshold = true
-				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
-					if !b.processBatch(batchKey, batch) {
-						messages.Prepend(batch...)
+			for batchKey, messages := range b.messages.ToMap() {
+				if messages.Len() >= b.config.BatchSize {
+					if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
+						if !b.processBatch(batchKey, batch) {
+							messages.Prepend(batch...)
+						}
 					}
 				}
-
-				return true
-			})
-
-			if !hasBatchesReachedThreshold {
-				time.Sleep(time.Millisecond * 100)
 			}
 		}
+
+		time.Sleep(time.Millisecond * 100)
+
 	}
 }
 
