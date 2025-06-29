@@ -13,6 +13,7 @@ type producerSupervisor struct {
 	messageAck               Acknowledger
 	onProducersChange        chan map[string]*producer
 	onAllProducersDrained    chan bool
+	onAllProducersTerminated chan bool
 }
 
 func newProducerSupervisor(
@@ -27,6 +28,7 @@ func newProducerSupervisor(
 		messageAck:               messageAck,
 		onProducersChange:        make(chan map[string]*producer),
 		onAllProducersDrained:    make(chan bool),
+		onAllProducersTerminated: make(chan bool),
 	}
 }
 
@@ -48,30 +50,7 @@ func (s *producerSupervisor) Run(
 		p.Run(ctx)
 
 		go func(p *producer) {
-			for {
-				select {
-				case <-p.OnDrained():
-					allDrained := true
-
-					for _, producer := range s.producers.Values() {
-						if !producer.IsDrained() {
-							allDrained = false
-						}
-					}
-
-					if allDrained {
-						select {
-						case s.onAllProducersDrained <- true: // sent successfully
-						default: // no receiver, ignore
-						}
-					}
-
-				case panic, ok := <-p.OnTerminated():
-					if ok && panic != nil {
-						s.handleProducerPanic(p, ctx)
-					}
-				}
-			}
+			s.watchProducerStatus(p, ctx)
 		}(p)
 	}
 
@@ -102,14 +81,63 @@ func (s *producerSupervisor) handleProducerPanic(p *producer, ctx context.Contex
 	newProducer.Run(ctx)
 
 	go func(p *producer) {
-		panic, ok := <-p.OnTerminated()
-
-		if ok && panic != nil {
-			s.handleProducerPanic(p, ctx)
-		}
+		s.watchProducerStatus(p, ctx)
 	}(newProducer)
 
 	s.onProducersChange <- s.producers.ToMap()
+}
+
+func (s *producerSupervisor) watchProducerStatus(p *producer, ctx context.Context) {
+	for {
+		select {
+		case <-p.OnDrained():
+			s.checkIfAllProducersDrained()
+		case panic, ok := <-p.OnTerminated():
+			if ok {
+				if panic != nil {
+					s.handleProducerPanic(p, ctx)
+				} else {
+					s.checkIfAllProducersTerminated()
+				}
+			}
+
+			return
+		}
+	}
+}
+
+func (s *producerSupervisor) checkIfAllProducersDrained() {
+	allDrained := true
+
+	for _, producer := range s.producers.Values() {
+		if !producer.IsDrained() {
+			allDrained = false
+		}
+	}
+
+	if allDrained {
+		select {
+		case s.onAllProducersDrained <- true: // sent successfully
+		default: // no receiver, ignore
+		}
+	}
+}
+
+func (s *producerSupervisor) checkIfAllProducersTerminated() {
+	allTerminated := true
+
+	for _, producer := range s.producers.Values() {
+		if !producer.IsTerminated() {
+			allTerminated = false
+		}
+	}
+
+	if allTerminated {
+		select {
+		case s.onAllProducersTerminated <- true: // sent successfully
+		default: // no receiver, ignore
+		}
+	}
 }
 
 func (s *producerSupervisor) OnAllProducersDrained() <-chan bool {

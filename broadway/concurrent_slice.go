@@ -98,19 +98,6 @@ func (s *concurrentSlice[T]) IsEmpty() bool {
 	return len(s.items) == 0
 }
 
-// Drain removes all items from the slice and returns them.
-//
-// Returns:
-//   - A new slice containing all the items
-func (s *concurrentSlice[T]) Drain() []T {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	items := s.items
-	s.items = make([]T, 0)
-	return items
-}
-
 // Find searches for an item in the slice that satisfies the given predicate.
 //
 // Parameters:

@@ -110,6 +110,7 @@ func (p *messageProcessor) Run(ctx context.Context) {
 				p.flushAndFailAll(r)
 				p.Terminate()
 			} else {
+				p.requestBuffered()
 				p.flush(ctx)
 			}
 
@@ -128,7 +129,7 @@ func (p *messageProcessor) Run(ctx context.Context) {
 			}
 
 			if p.messages.Len() < p.config.MinDemand {
-				p.request()
+				p.request(p.producers.Values()...)
 			}
 
 			total := min((p.config.MaxDemand+p.config.MinDemand)/2, p.messages.Len())
@@ -142,6 +143,27 @@ func (p *messageProcessor) Run(ctx context.Context) {
 			p.process(messages, ctx)
 		}
 	}()
+
+}
+
+func (p *messageProcessor) requestBuffered() {
+	for {
+
+		producersWithBufferedMessages := lo.Filter(
+			p.producers.Values(),
+			func(producer *producer, _ int) bool {
+				return producer.BufferCount() > 0
+			},
+		)
+
+		if len(producersWithBufferedMessages) == 0 {
+			return
+		}
+
+		p.request(producersWithBufferedMessages...)
+
+		time.Sleep(time.Millisecond * 100)
+	}
 
 }
 
@@ -288,14 +310,14 @@ func (p *messageProcessor) sendToBatcher(messages []*Message) {
 }
 
 // request sends requests to the producers to obtain more messages.
-func (p *messageProcessor) request() {
+func (p *messageProcessor) request(producers ...*producer) {
 
 	demand := p.config.MaxDemand - p.config.MinDemand
 
-	for producerId, producer := range p.producers.ToMap() {
-		if r, ok := p.pendingRequests.Get(producerId); ok {
+	for _, producer := range producers {
+		if r, ok := p.pendingRequests.Get(producer.Id); ok {
 			if r.IsClosed() {
-				p.pendingRequests.Delete(producerId)
+				p.pendingRequests.Delete(producer.Id)
 			} else {
 				continue
 			}
@@ -307,7 +329,7 @@ func (p *messageProcessor) request() {
 			continue
 		}
 
-		p.pendingRequests.Set(producerId, r)
+		p.pendingRequests.Set(producer.Id, r)
 
 		go func(r *request, producerId string) {
 			for messages := range r.Response {
@@ -315,7 +337,7 @@ func (p *messageProcessor) request() {
 			}
 
 			p.pendingRequests.Delete(producerId)
-		}(r, producerId)
+		}(r, producer.Id)
 	}
 }
 

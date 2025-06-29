@@ -101,6 +101,8 @@ func (p *Pipeline) Run(ctx context.Context) {
 		<-ctx.Done()
 
 		producerSupervisor.Terminate()
+		<-producerSupervisor.onAllProducersTerminated
+
 		messageProcessorSupervisor.Terminate()
 		<-messageProcessorSupervisor.OnAllProcessorsTerminated()
 
