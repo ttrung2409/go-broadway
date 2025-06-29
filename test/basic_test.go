@@ -22,10 +22,11 @@ type basicTestProducer struct {
 	totalFailed   int
 	producedCount int
 	failedCount   int
+	fixedDemand   int
 }
 
 func (p *basicTestProducer) New() broadway.Producer {
-	return &basicTestProducer{totalFailed: p.totalFailed}
+	return &basicTestProducer{totalFailed: p.totalFailed, fixedDemand: p.fixedDemand}
 }
 
 const basicTestTotalMessages = 100
@@ -40,6 +41,9 @@ func (p *basicTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
 	}
 
 	demand = min(demand, basicTestTotalMessages-p.producedCount)
+	if p.fixedDemand > 0 {
+		demand = p.fixedDemand
+	}
 
 	userIds := make([]string, 0)
 	for i := 0; i < basicTestTotalUsers; i++ {
@@ -211,4 +215,92 @@ func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
 
 	assert.Equal(t, basicTestTotalMessages/2, successfulCount)
 	assert.Equal(t, basicTestTotalMessages/2, failedCount)
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	var (
+		count int
+		mu    sync.Mutex
+	)
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count += len(messages)
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &basicTestProducer{fixedDemand: basicTestTotalMessages * 5},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &basicTestMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   100,
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+	assert.Equal(t, basicTestTotalMessages*5, count)
+}
+
+func TestGracefulShutdown_WithBatching(t *testing.T) {
+	var (
+		count int
+		mu    sync.Mutex
+	)
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count += len(messages)
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &basicTestProducer{fixedDemand: basicTestTotalMessages * 5},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &basicTestMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   100,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &basicTestBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+	assert.Equal(t, basicTestTotalMessages*5, count)
 }

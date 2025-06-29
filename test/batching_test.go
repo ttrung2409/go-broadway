@@ -261,7 +261,7 @@ func (p *multiBatcherBatchProcessor) Handle(
 	return messages, nil
 }
 
-func TestMessagesRoutedToSameBatcher(t *testing.T) {
+func MultiBatcher_TestMessagesRoutedToSameBatcher(t *testing.T) {
 	acknowledger := func(messages []*broadway.Message, err error) {
 		for _, message := range messages {
 			assert.Equal(
