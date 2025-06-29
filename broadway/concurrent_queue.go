@@ -18,32 +18,32 @@ func newConcurrentQueue[T any]() *concurrentQueue[T] {
 	return &concurrentQueue[T]{queue: make([]T, 0), mu: sync.RWMutex{}}
 }
 
-// Enqueue adds one or more items to the end of the queue.
+// enqueue adds one or more items to the end of the queue.
 //
 // Parameters:
 //   - items: The items to be added to the end of the queue
-func (q *concurrentQueue[T]) Enqueue(items ...T) {
+func (q *concurrentQueue[T]) enqueue(items ...T) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.queue = append(q.queue, items...)
 }
 
-// Prepend adds one or more items to the beginning of the queue.
+// prepend adds one or more items to the beginning of the queue.
 //
 // Parameters:
 //   - items: The items to be added to the beginning of the queue
-func (q *concurrentQueue[T]) Prepend(items ...T) {
+func (q *concurrentQueue[T]) prepend(items ...T) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.queue = append(items, q.queue...)
 }
 
-// Dequeue removes and returns the first item in the queue.
+// dequeue removes and returns the first item in the queue.
 //
 // Returns:
 //   - The first item in the queue
 //   - true if an item was successfully dequeued, false otherwise
-func (q *concurrentQueue[T]) Dequeue() (T, bool) {
+func (q *concurrentQueue[T]) dequeue() (T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.queue) == 0 {
@@ -56,7 +56,7 @@ func (q *concurrentQueue[T]) Dequeue() (T, bool) {
 	return item, true
 }
 
-// DequeueMany removes and returns up to 'total' items from the queue.
+// dequeueMany removes and returns up to 'total' items from the queue.
 // If the queue contains fewer than 'total' items, all available items are returned.
 //
 // Parameters:
@@ -65,7 +65,7 @@ func (q *concurrentQueue[T]) Dequeue() (T, bool) {
 // Returns:
 //   - A slice containing the dequeued items (may be fewer than requested)
 //   - true if at least one item was dequeued, false otherwise
-func (q *concurrentQueue[T]) DequeueMany(total int) ([]T, bool) {
+func (q *concurrentQueue[T]) dequeueMany(total int) ([]T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -80,12 +80,12 @@ func (q *concurrentQueue[T]) DequeueMany(total int) ([]T, bool) {
 	return items, len(items) > 0
 }
 
-// DequeueAll removes and returns all items currently in the queue.
+// dequeueAll removes and returns all items currently in the queue.
 //
 // Returns:
 //   - A slice containing all items that were in the queue
 //   - true if at least one item was in the queue, false otherwise
-func (q *concurrentQueue[T]) DequeueAll() ([]T, bool) {
+func (q *concurrentQueue[T]) dequeueAll() ([]T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -94,18 +94,18 @@ func (q *concurrentQueue[T]) DequeueAll() ([]T, bool) {
 	return items, len(items) > 0
 }
 
-// Len returns the number of items currently in the queue.
+// len returns the number of items currently in the queue.
 //
 // Returns:
 //   - The number of items in the queue
-func (q *concurrentQueue[T]) Len() int {
+func (q *concurrentQueue[T]) len() int {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
 	return len(q.queue)
 }
 
-func (q *concurrentQueue[T]) ToSlice() []T {
+func (q *concurrentQueue[T]) toSlice() []T {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 

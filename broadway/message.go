@@ -5,12 +5,12 @@ type MessagePayload any
 // Message represents a unit of data flowing through the Broadway pipeline.
 // It contains the actual payload and metadata for routing and acknowledgment.
 type Message struct {
-	Payload  MessagePayload
-	Batcher  string
-	BatchKey string
+	Payload      MessagePayload
+	Batcher      string
+	BatchKey     string
+	PartitionKey string
 
-	ack          Acknowledger
-	partitionKey string
+	ack Acknowledger
 }
 
 type messageArgs struct {
@@ -26,15 +26,8 @@ func newMessage(args messageArgs) *Message {
 
 	return &Message{
 		Payload:      args.payload,
-		ack:          args.ack,
-		partitionKey: args.partitionKey,
+		PartitionKey: args.partitionKey,
+
+		ack: args.ack,
 	}
-}
-
-func (m *Message) PartitionKey() string {
-	return m.partitionKey
-}
-
-func (m *Message) Ack() Acknowledger {
-	return m.ack
 }

@@ -8,8 +8,10 @@ import (
 	"time"
 )
 
-const defaultBatcherName = "default"
-const defaultBatchKey = "default"
+const (
+	defaultBatcherName = "default"
+	defaultBatchKey    = "default"
+)
 
 type BatcherConfig struct {
 	Name         string         // Unique name for this batcher (default: "default")
@@ -30,17 +32,44 @@ type BatcherConfig struct {
 //
 // When partitioning is enabled, messages with the same partition key will
 // be consistently routed to the same batch processor.
-type batcher struct {
-	config       BatcherConfig
-	messages     *concurrentMap[string, *concurrentQueue[*Message]]
-	hr           *hashRing[*batchProcessor]
-	receiver     chan []*Message
-	terminated   bool
-	mu           sync.Mutex
-	onTerminated chan any
+type batcher interface {
+	// run starts the batcher with the provided context, which starts
+	// batch processors according to the configured concurrency.
+	//
+	// Parameters:
+	//   - ctx: The context provided when starting the pipeline
+	run(ctx context.Context)
+
+	// terminate flushes all remaining messages in the queues and stops the batcher.
+	// After calling terminate, the batcher will no longer accept new messages.
+	terminate()
+
+	// send attempts to accept a batch of messages for processing.
+	// Returns true if the messages were accepted, false otherwise.
+	//
+	// Parameters:
+	//   - messages: A batch of messages to be processed.
+	//
+	// Returns:
+	//   - true if the messages were accepted, false otherwise
+	send(messages []*Message) bool
+
+	config() BatcherConfig
+	onTerminated() <-chan any
+	isTerminated() bool
 }
 
-func newBatcher(config BatcherConfig) *batcher {
+type internalBatcher struct {
+	_config       BatcherConfig
+	messages      *concurrentMap[string, *concurrentQueue[*Message]]
+	hr            *hashRing[batchProcessor]
+	receiver      chan []*Message
+	terminated    bool
+	mu            sync.Mutex
+	_onTerminated chan any
+}
+
+func newBatcher(config BatcherConfig) batcher {
 	if config.Name == "" {
 		config.Name = defaultBatcherName
 	}
@@ -53,29 +82,24 @@ func newBatcher(config BatcherConfig) *batcher {
 		config.BatchTimeout = time.Second
 	}
 
-	return &batcher{
-		config:       config,
-		messages:     newConcurrentMap[string, *concurrentQueue[*Message]](),
-		hr:           newHashRing[*batchProcessor](),
-		receiver:     make(chan []*Message),
-		mu:           sync.Mutex{},
-		onTerminated: make(chan any),
+	return &internalBatcher{
+		_config:       config,
+		messages:      newConcurrentMap[string, *concurrentQueue[*Message]](),
+		hr:            newHashRing[batchProcessor](),
+		receiver:      make(chan []*Message),
+		mu:            sync.Mutex{},
+		_onTerminated: make(chan any),
 	}
 }
 
-// Run starts the batcher with the provided context, which starts
-// batch processors according to the configured concurrency.
-//
-// Parameters:
-//   - ctx: The context provided when starting the pipeline
-func (b *batcher) Run(ctx context.Context) {
-	for i := 0; i < b.config.Concurrency; i++ {
-		processor := newBatchProcessor(b.config.Processor)
-		processor.Run(context.WithValue(ctx, BatcherContextKey, b.config.Name))
-		b.hr.AddNode(processor)
+func (b *internalBatcher) run(ctx context.Context) {
+	for i := 0; i < b._config.Concurrency; i++ {
+		processor := newBatchProcessor(b._config.Processor)
+		processor.run(context.WithValue(ctx, BatcherContextKey, b._config.Name))
+		b.hr.addNode(processor)
 
-		go func(p *batchProcessor) {
-			panic, ok := <-p.OnTerminated()
+		go func(p batchProcessor) {
+			panic, ok := <-p.onTerminated()
 
 			if ok && panic != nil {
 				b.handleProcessorPanic(p, ctx)
@@ -92,30 +116,30 @@ func (b *batcher) Run(ctx context.Context) {
 				fmt.Println(string(debug.Stack()))
 
 				b.flushAndFailAll(r)
-				b.Terminate()
+				b.terminate()
 			} else {
 				b.flush()
 			}
 
-			processors := b.hr.GetAllNodes()
+			processors := b.hr.getAllNodes()
 			for _, processor := range processors {
-				processor.Terminate()
+				processor.terminate()
 			}
 
-			b.onTerminated <- r
-			close(b.onTerminated)
-			b.onTerminated = nil
+			b._onTerminated <- r
+			close(b._onTerminated)
+			b._onTerminated = nil
 		}()
 
 		for messages := range b.receiver {
 
 			for _, message := range messages {
-				if _, ok := b.messages.Get(message.BatchKey); !ok {
-					b.messages.Set(message.BatchKey, newConcurrentQueue[*Message]())
+				if _, ok := b.messages.get(message.BatchKey); !ok {
+					b.messages.set(message.BatchKey, newConcurrentQueue[*Message]())
 				}
 
-				batch, _ := b.messages.Get(message.BatchKey)
-				batch.Enqueue(message)
+				batch, _ := b.messages.get(message.BatchKey)
+				batch.enqueue(message)
 			}
 		}
 	}()
@@ -124,9 +148,7 @@ func (b *batcher) Run(ctx context.Context) {
 
 }
 
-// Terminate flushes all remaining messages in the queues and stops the batcher.
-// After calling Terminate, the batcher will no longer accept new messages.
-func (b *batcher) Terminate() {
+func (b *internalBatcher) terminate() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -138,15 +160,7 @@ func (b *batcher) Terminate() {
 	close(b.receiver)
 }
 
-// Send attempts to accept a batch of messages for processing.
-// Returns true if the messages were accepted, false otherwise.
-//
-// Parameters:
-//   - messages: A batch of messages to be processed.
-//
-// Returns:
-//   - true if the messages were accepted, false otherwise
-func (b *batcher) Send(messages []*Message) bool {
+func (b *internalBatcher) send(messages []*Message) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -162,7 +176,7 @@ func (b *batcher) Send(messages []*Message) bool {
 // flush processes all remaining messages in the batcher's queues when the batcher
 // is being terminated. It attempts to deliver all batched messages to their respective
 // batch processors before shutting down.
-func (b *batcher) flush() {
+func (b *internalBatcher) flush() {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("batcher panicked: %v\n", r)
@@ -170,19 +184,19 @@ func (b *batcher) flush() {
 	}()
 
 	for {
-		for batchKey, messages := range b.messages.ToMap() {
-			if batch, ok := messages.DequeueAll(); ok {
+		for batchKey, messages := range b.messages.toMap() {
+			if batch, ok := messages.dequeueAll(); ok {
 				if b.processBatch(batchKey, batch) {
-					b.messages.Delete(batchKey)
+					b.messages.delete(batchKey)
 				} else {
-					messages.Prepend(batch...)
+					messages.prepend(batch...)
 				}
 			} else {
-				b.messages.Delete(batchKey)
+				b.messages.delete(batchKey)
 			}
 		}
 
-		if b.messages.Len() == 0 {
+		if b.messages.len() == 0 {
 			return
 		}
 
@@ -190,16 +204,16 @@ func (b *batcher) flush() {
 	}
 }
 
-func (b *batcher) flushAndFailAll(r any) {
-	for _, messages := range b.messages.Values() {
-		msgs := messages.ToSlice()
+func (b *internalBatcher) flushAndFailAll(r any) {
+	for _, messages := range b.messages.values() {
+		msgs := messages.toSlice()
 
 		if len(msgs) == 0 {
 			continue
 		}
 
-		if ack := msgs[0].Ack(); ack != nil {
-			ack(msgs, fmt.Errorf("batcher %s panicked: %v", b.config.Name, r))
+		if ack := msgs[0].ack; ack != nil {
+			ack(msgs, fmt.Errorf("batcher %s panicked: %v", b._config.Name, r))
 		}
 	}
 }
@@ -208,8 +222,8 @@ func (b *batcher) flushAndFailAll(r any) {
 // It continuously monitors the message queues and processes batches when either:
 //  1. A batch reaches the configured batch size
 //  2. The batch timeout expires
-func (b *batcher) processBatches() {
-	ticker := time.NewTicker(b.config.BatchTimeout)
+func (b *internalBatcher) processBatches() {
+	ticker := time.NewTicker(b._config.BatchTimeout)
 	defer ticker.Stop()
 
 	for {
@@ -219,21 +233,21 @@ func (b *batcher) processBatches() {
 
 		select {
 		case <-ticker.C:
-			for batchKey, messages := range b.messages.ToMap() {
-				if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
+			for batchKey, messages := range b.messages.toMap() {
+				if batch, ok := messages.dequeueMany(b._config.BatchSize); ok {
 					if !b.processBatch(batchKey, batch) {
-						messages.Prepend(batch...)
+						messages.prepend(batch...)
 					}
 				}
 			}
 
 		default:
 			// Check for any batches that have reached the batch size threshold
-			for batchKey, messages := range b.messages.ToMap() {
-				if messages.Len() >= b.config.BatchSize {
-					if batch, ok := messages.DequeueMany(b.config.BatchSize); ok {
+			for batchKey, messages := range b.messages.toMap() {
+				if messages.len() >= b._config.BatchSize {
+					if batch, ok := messages.dequeueMany(b._config.BatchSize); ok {
 						if !b.processBatch(batchKey, batch) {
-							messages.Prepend(batch...)
+							messages.prepend(batch...)
 						}
 					}
 				}
@@ -255,10 +269,10 @@ func (b *batcher) processBatches() {
 //
 // Returns:
 //   - true if the batch was successfully sent to a processor, false otherwise
-func (b *batcher) processBatch(batchKey string, batch []*Message) bool {
+func (b *internalBatcher) processBatch(batchKey string, batch []*Message) bool {
 
-	if processor, ok := b.hr.GetNode(batchKey); ok {
-		return processor.Send(batch)
+	if processor, ok := b.hr.getNode(batchKey); ok {
+		return processor.send(batch)
 	}
 
 	return false
@@ -278,29 +292,29 @@ func (b *batcher) processBatch(batchKey string, batch []*Message) bool {
 // Parameters:
 //   - processor: The failed batch processor to be replaced
 //   - ctx: The context provided when starting the pipeline
-func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Context) {
+func (b *internalBatcher) handleProcessorPanic(processor batchProcessor, ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.hr.RemoveNode(processor)
+	b.hr.removeNode(processor)
 
-	newProcessor := newBatchProcessor(b.config.Processor)
-	newProcessor.Run(ctx)
+	newProcessor := newBatchProcessor(b._config.Processor)
+	newProcessor.run(ctx)
 
-	keySharingProcessor, _ := b.hr.GetNextNode(newProcessor)
-
-	if keySharingProcessor != nil {
-		keySharingProcessor.Pause()
-	}
-
-	b.hr.AddNode(newProcessor)
+	keySharingProcessor, _ := b.hr.getNextNode(newProcessor)
 
 	if keySharingProcessor != nil {
-		keySharingProcessor.Resume()
+		keySharingProcessor.pause()
 	}
 
-	go func(p *batchProcessor) {
-		panic, ok := <-p.OnTerminated()
+	b.hr.addNode(newProcessor)
+
+	if keySharingProcessor != nil {
+		keySharingProcessor.resume()
+	}
+
+	go func(p batchProcessor) {
+		panic, ok := <-p.onTerminated()
 
 		if ok && panic != nil {
 			b.handleProcessorPanic(p, ctx)
@@ -308,14 +322,14 @@ func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Co
 	}(newProcessor)
 }
 
-func (b *batcher) OnTerminated() <-chan any {
-	return b.onTerminated
+func (b *internalBatcher) onTerminated() <-chan any {
+	return b._onTerminated
 }
 
-func (b *batcher) IsTerminated() bool {
-	return b.onTerminated == nil
+func (b *internalBatcher) isTerminated() bool {
+	return b._onTerminated == nil
 }
 
-func (b *batcher) Name() string {
-	return b.config.Name
+func (b *internalBatcher) config() BatcherConfig {
+	return b._config
 }

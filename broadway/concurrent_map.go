@@ -29,40 +29,40 @@ func newConcurrentMap[K comparable, V any](m ...map[K]V) *concurrentMap[K, V] {
 	}
 }
 
-// Get retrieves a value for the given key.
+// get retrieves a value for the given key.
 // Returns the value and a boolean flag indicating if the key was found.
 // If the key doesn't exist, the zero value of V and false are returned.
-func (m *concurrentMap[K, V]) Get(key K) (V, bool) {
+func (m *concurrentMap[K, V]) get(key K) (V, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	val, ok := m.data[key]
 	return val, ok
 }
 
-// Set stores a value for the given key.
+// set stores a value for the given key.
 // If the key already exists, its value will be overwritten.
-func (m *concurrentMap[K, V]) Set(key K, value V) {
+func (m *concurrentMap[K, V]) set(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data[key] = value
 }
 
-// Delete removes a key-value pair from the map.
+// delete removes a key-value pair from the map.
 // If the key doesn't exist, the operation is a no-op.
-func (m *concurrentMap[K, V]) Delete(key K) {
+func (m *concurrentMap[K, V]) delete(key K) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.data, key)
 }
 
-// Len returns the number of items in the map
-func (m *concurrentMap[K, V]) Len() int {
+// len returns the number of items in the map
+func (m *concurrentMap[K, V]) len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.data)
 }
 
-func (m *concurrentMap[K, V]) ToMap() map[K]V {
+func (m *concurrentMap[K, V]) toMap() map[K]V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	snapshot := make(map[K]V)
@@ -73,7 +73,7 @@ func (m *concurrentMap[K, V]) ToMap() map[K]V {
 	return snapshot
 }
 
-func (m *concurrentMap[K, V]) Reset(new map[K]V) {
+func (m *concurrentMap[K, V]) reset(new map[K]V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -87,7 +87,7 @@ func (m *concurrentMap[K, V]) Reset(new map[K]V) {
 	}
 }
 
-func (m *concurrentMap[K, V]) Keys() []K {
+func (m *concurrentMap[K, V]) keys() []K {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -99,7 +99,7 @@ func (m *concurrentMap[K, V]) Keys() []K {
 	return keys
 }
 
-func (m *concurrentMap[K, V]) Values() []V {
+func (m *concurrentMap[K, V]) values() []V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

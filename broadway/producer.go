@@ -32,12 +32,39 @@ type Producer interface {
 	HandleDemand(demand int) []MessagePayload
 }
 
+type producer interface {
+	id() string
+
+	// Run starts the producer with the provided context in a goroutine.
+	//
+	// Parameters:
+	//   - ctx: The context provided when starting the pipeline.
+	run(ctx context.Context)
+
+	// send submits a request to the producer for processing.
+	//
+	// Parameters:
+	//   - request: The request containing demand information from a message processor
+	//
+	// Returns:
+	//   - true if the request was sent successfully, otherwise false
+	send(request *request) bool
+
+	// terminate closes pending requests and stops the producer.
+	// After calling terminate, the producer will no longer accept new requests.
+	terminate()
+
+	onDrained() <-chan bool
+	onTerminated() <-chan any
+	isDrained() bool
+	isTerminated() bool
+}
+
 type messageProcessorResolver func(partitionKey string) (string, bool)
 
-type producer struct {
-	Producer
-	Id string
-
+type internalProducer struct {
+	_id                      string
+	producer                 Producer
 	config                   ProducerConfig
 	requests                 *concurrentSlice[*request]
 	requestChan              chan *request
@@ -46,39 +73,35 @@ type producer struct {
 	drained                  bool
 	messageProcessorResolver messageProcessorResolver
 	messageAck               Acknowledger
-	onDrained                chan bool
-	onTerminated             chan any
+	_onDrained               chan bool
+	_onTerminated            chan any
 }
 
 func newProducer(
 	config ProducerConfig,
 	messageProcessorResolver messageProcessorResolver,
 	messageAck Acknowledger,
-) *producer {
+) producer {
 
 	if config.Concurrency == 0 {
 		config.Concurrency = 1
 	}
 
-	return &producer{
-		Id:                       uuid.New().String(),
-		Producer:                 config.Producer.New(),
+	return &internalProducer{
+		_id:                      uuid.New().String(),
+		producer:                 config.Producer.New(),
 		config:                   config,
 		requests:                 newConcurrentSlice[*request](),
 		requestChan:              make(chan *request),
 		mu:                       sync.Mutex{},
 		messageProcessorResolver: messageProcessorResolver,
 		messageAck:               messageAck,
-		onDrained:                make(chan bool),
-		onTerminated:             make(chan any),
+		_onDrained:               make(chan bool),
+		_onTerminated:            make(chan any),
 	}
 }
 
-// Run starts the producer with the provided context in a goroutine.
-//
-// Parameters:
-//   - ctx: The context provided when starting the pipeline.
-func (p *producer) Run(ctx context.Context) {
+func (p *internalProducer) run(ctx context.Context) {
 
 	go func() {
 		defer func() {
@@ -86,19 +109,19 @@ func (p *producer) Run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("producer panicked: %v\n", r)
-				p.Terminate()
+				p.terminate()
 			}
 
-			for _, request := range p.requests.ToSlice() {
-				request.Close()
+			for _, request := range p.requests.toSlice() {
+				request.close()
 			}
 
-			p.onTerminated <- r
-			close(p.onTerminated)
+			p._onTerminated <- r
+			close(p._onTerminated)
 		}()
 
 		for request := range p.requestChan {
-			p.requests.Add(request)
+			p.requests.add(request)
 		}
 	}()
 
@@ -106,14 +129,7 @@ func (p *producer) Run(ctx context.Context) {
 
 }
 
-// Send submits a request to the producer for processing.
-//
-// Parameters:
-//   - request: The request containing demand information from a message processor
-//
-// Returns:
-//   - true if the request was sent successfully, otherwise false
-func (p *producer) Send(request *request) bool {
+func (p *internalProducer) send(request *request) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -128,7 +144,7 @@ func (p *producer) Send(request *request) bool {
 
 // processRequests continuously processes incoming requests by generating messages
 // in response to demand and sending them to the appropriate message processors.
-func (p *producer) processRequests() {
+func (p *internalProducer) processRequests() {
 	go func() {
 
 		for {
@@ -137,17 +153,17 @@ func (p *producer) processRequests() {
 				return
 			}
 
-			if p.requests.Len() == 0 {
+			if p.requests.len() == 0 {
 				continue
 			}
 
-			p.requests = p.requests.Filter(func(r *request) bool {
-				return !r.IsClosed()
+			p.requests = p.requests.filter(func(r *request) bool {
+				return !r.isClosed()
 			})
 
 			totalDemand := 0
-			for _, request := range p.requests.ToSlice() {
-				totalDemand += request.Demand
+			for _, request := range p.requests.toSlice() {
+				totalDemand += request.demand
 			}
 
 			if totalDemand == 0 {
@@ -156,7 +172,7 @@ func (p *producer) processRequests() {
 
 			payloads := make([]MessagePayload, 0)
 			if !p.terminated {
-				payloads = p.HandleDemand(totalDemand)
+				payloads = p.producer.HandleDemand(totalDemand)
 			}
 
 			messages := lo.Map(payloads, func(payload MessagePayload, _ int) *Message {
@@ -182,7 +198,7 @@ func (p *producer) processRequests() {
 
 			if p.drained {
 				select {
-				case p.onDrained <- true: // sent successfully
+				case p._onDrained <- true: // sent successfully
 				default: // No receiver, ignore
 				}
 			}
@@ -194,17 +210,17 @@ func (p *producer) processRequests() {
 
 // sendMessages distributes messages to message processors in a round-robin fashion,
 // without regard to partition keys.
-func (p *producer) sendMessages(messages []*Message) {
+func (p *internalProducer) sendMessages(messages []*Message) {
 	type augmentedRequest struct {
 		request        *request
 		originalDemand int
 		fullfilled     bool
 	}
 
-	requests := lo.Map(p.requests.ToSlice(), func(r *request, _ int) *augmentedRequest {
+	requests := lo.Map(p.requests.toSlice(), func(r *request, _ int) *augmentedRequest {
 		return &augmentedRequest{
 			request:        r,
-			originalDemand: r.Demand,
+			originalDemand: r.demand,
 		}
 	})
 
@@ -221,22 +237,22 @@ func (p *producer) sendMessages(messages []*Message) {
 
 		r := requests[index]
 
-		demand := min(r.request.Demand, len(messages))
-		ok := r.request.Reply(messages[:demand])
+		demand := min(r.request.demand, len(messages))
+		ok := r.request.reply(messages[:demand])
 
 		if !ok {
 			continue
 		}
 
 		messages = messages[demand:]
-		r.request.Demand -= demand
+		r.request.demand -= demand
 
 		// If there is no demand left, the request is considered fulfilled.
 		// Reset the demand to its original value so that the request can
 		// still accept more messages in case the messages are not fully consumed
 		// by other message processors.
-		if r.request.Demand == 0 {
-			r.request.Demand = r.originalDemand
+		if r.request.demand == 0 {
+			r.request.demand = r.originalDemand
 			r.fullfilled = true
 		}
 
@@ -245,8 +261,8 @@ func (p *producer) sendMessages(messages []*Message) {
 
 	for _, r := range requests {
 		if r.fullfilled {
-			r.request.Close()
-			p.requests.Remove(r.request)
+			r.request.close()
+			p.requests.remove(r.request)
 		}
 	}
 
@@ -255,9 +271,9 @@ func (p *producer) sendMessages(messages []*Message) {
 // sendPartitionedMessages distributes messages to message processors based on their
 // partition keys. Messages with the same partition key are guaranteed to be processed
 // by the same message processor. This ensures ordering of related messages.
-func (p *producer) sendPartitionedMessages(messages []*Message) {
+func (p *internalProducer) sendPartitionedMessages(messages []*Message) {
 	partitionedMessages := lo.GroupBy(messages, func(message *Message) string {
-		return message.PartitionKey()
+		return message.PartitionKey
 	})
 
 	for partitionKey, partition := range partitionedMessages {
@@ -266,31 +282,29 @@ func (p *producer) sendPartitionedMessages(messages []*Message) {
 			continue
 		}
 
-		request, ok := lo.Find(p.requests.ToSlice(), func(r *request) bool {
-			return r.MessageProcessorId == processorId
+		request, ok := lo.Find(p.requests.toSlice(), func(r *request) bool {
+			return r.messageProcessorId == processorId
 		})
 
 		if !ok {
 			continue
 		}
 
-		ok = request.Reply(partition)
+		ok = request.reply(partition)
 		if !ok {
 			continue
 		}
 
-		request.Demand -= len(partition)
+		request.demand -= len(partition)
 
-		if request.Demand <= 0 {
-			request.Close()
-			p.requests.Remove(request)
+		if request.demand <= 0 {
+			request.close()
+			p.requests.remove(request)
 		}
 	}
 }
 
-// Terminate closes pending requests and stops the producer.
-// After calling Terminate, the producer will no longer accept new requests.
-func (p *producer) Terminate() {
+func (p *internalProducer) terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -302,18 +316,22 @@ func (p *producer) Terminate() {
 	close(p.requestChan)
 }
 
-func (p *producer) OnDrained() <-chan bool {
-	return p.onDrained
+func (p *internalProducer) onDrained() <-chan bool {
+	return p._onDrained
 }
 
-func (p *producer) OnTerminated() <-chan any {
-	return p.onTerminated
+func (p *internalProducer) onTerminated() <-chan any {
+	return p._onTerminated
 }
 
-func (p *producer) IsDrained() bool {
+func (p *internalProducer) isDrained() bool {
 	return p.drained
 }
 
-func (p *producer) IsTerminated() bool {
+func (p *internalProducer) isTerminated() bool {
 	return p.terminated
+}
+
+func (p *internalProducer) id() string {
+	return p._id
 }

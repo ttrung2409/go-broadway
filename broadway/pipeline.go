@@ -65,17 +65,17 @@ func (p *Pipeline) Run(ctx context.Context) {
 		producerSupervisor := newProducerSupervisor(
 			producerConfig,
 			func(partitionKey string) (string, bool) {
-				return messageProcessorSupervisor.Resolve(partitionKey)
+				return messageProcessorSupervisor.resolve(partitionKey)
 			},
 			p.config.Acknowledger,
 		)
 
-		producers := producerSupervisor.Run(ctx)
+		producers := producerSupervisor.run(ctx)
 
 		batcherSupervisor := newBatcherSupervisor(p.config.Batchers)
-		batchers := batcherSupervisor.Run(ctx)
+		batchers := batcherSupervisor.run(ctx)
 
-		messageProcessorSupervisor.Run(ctx, producers, batchers)
+		messageProcessorSupervisor.run(ctx, producers, batchers)
 
 		go func() {
 			defer func() {
@@ -88,11 +88,11 @@ func (p *Pipeline) Run(ctx context.Context) {
 				}
 
 				select {
-				case producers := <-producerSupervisor.OnProducersChange():
-					messageProcessorSupervisor.SetProducers(producers)
-				case batchers := <-batcherSupervisor.OnBatchersChange():
-					messageProcessorSupervisor.SetBatchers(batchers)
-				case <-producerSupervisor.OnAllProducersDrained():
+				case producers := <-producerSupervisor.onProducersChange():
+					messageProcessorSupervisor.setProducers(producers)
+				case batchers := <-batcherSupervisor.onBatchersChange():
+					messageProcessorSupervisor.setBatchers(batchers)
+				case <-producerSupervisor.onAllProducersDrained():
 					p.onProducerDrained <- true
 				}
 			}
@@ -100,15 +100,15 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 		<-ctx.Done()
 
-		producerSupervisor.Terminate()
-		<-producerSupervisor.onAllProducersTerminated
+		producerSupervisor.terminate()
+		<-producerSupervisor.onAllProducersTerminated()
 
-		messageProcessorSupervisor.Terminate()
-		<-messageProcessorSupervisor.OnAllProcessorsTerminated()
+		messageProcessorSupervisor.terminate()
+		<-messageProcessorSupervisor.onAllProcessorsTerminated()
 
 		if batchers != nil {
-			batcherSupervisor.Terminate()
-			<-batcherSupervisor.OnAllBatchersTerminated()
+			batcherSupervisor.terminate()
+			<-batcherSupervisor.onAllBatchersTerminated()
 		}
 
 		p.terminate()

@@ -18,9 +18,12 @@ func (t *UserSessionTracker) New() broadway.BatchProcessor {
 	}
 }
 
-func (t *UserSessionTracker) Handle(messages []*broadway.Message, ctx context.Context) ([]*broadway.Message, error) {
+func (t *UserSessionTracker) Handle(
+	messages []*broadway.Message,
+	ctx context.Context,
+) ([]*broadway.Message, error) {
 
-	userId := messages[0].PartitionKey()
+	userId := messages[0].PartitionKey
 
 	session, ok := t.userSessions[userId]
 	if !ok {

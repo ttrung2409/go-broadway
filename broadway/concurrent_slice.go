@@ -21,36 +21,17 @@ func newConcurrentSlice[T comparable]() *concurrentSlice[T] {
 	return &concurrentSlice[T]{items: make([]T, 0), mu: sync.RWMutex{}}
 }
 
-// Add appends one or more items to the end of the slice.
+// add appends one or more items to the end of the slice.
 //
 // Parameters:
 //   - items: The items to be added to the end of the slice
-func (s *concurrentSlice[T]) Add(items ...T) {
+func (s *concurrentSlice[T]) add(items ...T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.items = append(s.items, items...)
 }
 
-// Shift removes and returns the first item in the slice.
-//
-// Returns:
-//   - The first item in the slice
-//   - true if an item was successfully removed, false otherwise
-func (s *concurrentSlice[T]) Shift() (T, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.items) == 0 {
-		var zeroValue T
-		return zeroValue, false
-	}
-
-	item := s.items[0]
-	s.items = s.items[1:]
-	return item, true
-}
-
-// Filter removes items from the slice that don't satisfy the predicate function.
+// filter removes items from the slice that don't satisfy the predicate function.
 // It returns a new slice containing only the items that satisfy the predicate.
 //
 // Parameters:
@@ -58,7 +39,7 @@ func (s *concurrentSlice[T]) Shift() (T, bool) {
 //
 // Returns:
 //   - A new concurrent slice after filtering
-func (s *concurrentSlice[T]) Filter(predicate func(item T) bool) *concurrentSlice[T] {
+func (s *concurrentSlice[T]) filter(predicate func(item T) bool) *concurrentSlice[T] {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -76,36 +57,25 @@ func (s *concurrentSlice[T]) Filter(predicate func(item T) bool) *concurrentSlic
 	}
 }
 
-// Len returns the number of items currently in the slice.
+// len returns the number of items currently in the slice.
 //
 // Returns:
 //   - The number of items in the slice
-func (s *concurrentSlice[T]) Len() int {
+func (s *concurrentSlice[T]) len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return len(s.items)
 }
 
-// Prepend adds one or more items to the beginning of the slice.
-//
-// Parameters:
-//   - items: The items to be added to the beginning of the slice
-func (s *concurrentSlice[T]) Prepend(items ...T) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.items = append(items, s.items...)
-}
-
-// Remove removes the first occurrence of the specified item from the slice.
+// remove removes the first occurrence of the specified item from the slice.
 //
 // Parameters:
 //   - item: The item to remove from the slice
 //
 // Returns:
 //   - true if the item was found and removed, false otherwise
-func (s *concurrentSlice[T]) Remove(item T) bool {
+func (s *concurrentSlice[T]) remove(item T) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,7 +89,7 @@ func (s *concurrentSlice[T]) Remove(item T) bool {
 	return false
 }
 
-func (s *concurrentSlice[T]) ToSlice() []T {
+func (s *concurrentSlice[T]) toSlice() []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -5,30 +5,29 @@ import (
 )
 
 type request struct {
-	Demand             int
-	MessageProcessorId string
-
-	response chan []*Message
-	closed   bool
-	mu       sync.Mutex
+	demand             int
+	messageProcessorId string
+	responseChan       chan []*Message
+	closed             bool
+	mu                 sync.Mutex
 }
 
 func newRequest(messageProcessorId string, demand int) *request {
 	return &request{
-		Demand:             demand,
-		MessageProcessorId: messageProcessorId,
-		response:           make(chan []*Message),
+		demand:             demand,
+		messageProcessorId: messageProcessorId,
+		responseChan:       make(chan []*Message),
 		mu:                 sync.Mutex{},
 	}
 }
 
-func (r *request) IsClosed() bool {
+func (r *request) isClosed() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closed
 }
 
-func (r *request) Close() {
+func (r *request) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -37,10 +36,10 @@ func (r *request) Close() {
 	}
 
 	r.closed = true
-	close(r.response)
+	close(r.responseChan)
 }
 
-func (r *request) Reply(messages []*Message) bool {
+func (r *request) reply(messages []*Message) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -48,11 +47,11 @@ func (r *request) Reply(messages []*Message) bool {
 		return false
 	}
 
-	r.response <- messages
+	r.responseChan <- messages
 
 	return true
 }
 
-func (r *request) Response() <-chan []*Message {
-	return r.response
+func (r *request) response() <-chan []*Message {
+	return r.responseChan
 }
