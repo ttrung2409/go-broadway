@@ -87,44 +87,6 @@ func (s *concurrentSlice[T]) Len() int {
 	return len(s.items)
 }
 
-// IsEmpty checks if the slice is empty.
-//
-// Returns:
-//   - true if the slice contains no items, false otherwise
-func (s *concurrentSlice[T]) IsEmpty() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return len(s.items) == 0
-}
-
-// Find searches for an item in the slice that satisfies the given predicate.
-//
-// Parameters:
-//   - predicate: A function that returns true when the desired item is found
-//
-// Returns:
-//   - The first item that satisfies the predicate
-//   - true if such an item was found, false otherwise
-func (s *concurrentSlice[T]) Find(predicate func(item T) bool) (T, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.items) == 0 {
-		var zeroValue T
-		return zeroValue, false
-	}
-
-	for _, item := range s.items {
-		if predicate(item) {
-			return item, true
-		}
-	}
-
-	var zeroValue T
-	return zeroValue, false
-}
-
 // Prepend adds one or more items to the beginning of the slice.
 //
 // Parameters:

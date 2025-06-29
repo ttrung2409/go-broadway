@@ -41,9 +41,7 @@ type producer struct {
 	config                   ProducerConfig
 	requests                 *concurrentSlice[*request]
 	requestChan              chan *request
-	buffer                   []*Message
 	mu                       sync.Mutex
-	terminating              bool
 	terminated               bool
 	drained                  bool
 	messageProcessorResolver messageProcessorResolver
@@ -88,7 +86,7 @@ func (p *producer) Run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("producer panicked: %v\n", r)
-				p.terminate()
+				p.Terminate()
 			}
 
 			for _, request := range p.requests.ToSlice() {
@@ -106,16 +104,6 @@ func (p *producer) Run(ctx context.Context) {
 
 	p.processRequests()
 
-	go func() {
-		for {
-			if p.terminating && len(p.buffer) == 0 {
-				p.terminate()
-				return
-			}
-
-			time.Sleep(time.Millisecond * 100)
-		}
-	}()
 }
 
 // Send submits a request to the producer for processing.
@@ -145,11 +133,11 @@ func (p *producer) processRequests() {
 
 		for {
 
-			if p.terminating && len(p.buffer) == 0 {
+			if p.terminated {
 				return
 			}
 
-			if p.requests.IsEmpty() {
+			if p.requests.Len() == 0 {
 				continue
 			}
 
@@ -167,7 +155,7 @@ func (p *producer) processRequests() {
 			}
 
 			payloads := make([]MessagePayload, 0)
-			if !p.terminating {
+			if !p.terminated {
 				payloads = p.HandleDemand(totalDemand)
 			}
 
@@ -184,12 +172,10 @@ func (p *producer) processRequests() {
 				return message
 			})
 
-			p.buffer = append(p.buffer, messages...)
-
 			if p.config.partitionKeyResolver != nil {
-				p.sendPartitionedMessages()
+				p.sendPartitionedMessages(messages)
 			} else {
-				p.sendMessages()
+				p.sendMessages(messages)
 			}
 
 			p.drained = len(messages) == 0
@@ -208,41 +194,69 @@ func (p *producer) processRequests() {
 
 // sendMessages distributes messages to message processors in a round-robin fashion,
 // without regard to partition keys.
-func (p *producer) sendMessages() {
+func (p *producer) sendMessages(messages []*Message) {
+	type augmentedRequest struct {
+		request        *request
+		originalDemand int
+		fullfilled     bool
+	}
+
+	requests := lo.Map(p.requests.ToSlice(), func(r *request, _ int) *augmentedRequest {
+		return &augmentedRequest{
+			request:        r,
+			originalDemand: r.Demand,
+		}
+	})
+
+	index := 0
+
 	for {
-		if len(p.buffer) == 0 {
-			return
+		if len(messages) == 0 {
+			break
 		}
 
-		request, ok := p.requests.Shift()
-
-		if !ok {
-			return
+		if index == len(requests) {
+			index = 0
 		}
 
-		demand := min(request.Demand, len(p.buffer))
-		ok = request.Reply(p.buffer[:demand])
+		r := requests[index]
+
+		demand := min(r.request.Demand, len(messages))
+		ok := r.request.Reply(messages[:demand])
 
 		if !ok {
 			continue
 		}
 
-		p.buffer = p.buffer[demand:]
-		request.Demand -= demand
+		messages = messages[demand:]
+		r.request.Demand -= demand
 
-		if request.Demand == 0 {
-			request.Close()
-		} else {
-			p.requests.Prepend(request)
+		// If there is no demand left, the request is considered fulfilled.
+		// Reset the demand to its original value so that the request can
+		// still accept more messages in case the messages are not fully consumed
+		// by other message processors.
+		if r.request.Demand == 0 {
+			r.request.Demand = r.originalDemand
+			r.fullfilled = true
+		}
+
+		index++
+	}
+
+	for _, r := range requests {
+		if r.fullfilled {
+			r.request.Close()
+			p.requests.Remove(r.request)
 		}
 	}
+
 }
 
 // sendPartitionedMessages distributes messages to message processors based on their
 // partition keys. Messages with the same partition key are guaranteed to be processed
 // by the same message processor. This ensures ordering of related messages.
-func (p *producer) sendPartitionedMessages() {
-	partitionedMessages := lo.GroupBy(p.buffer, func(message *Message) string {
+func (p *producer) sendPartitionedMessages(messages []*Message) {
+	partitionedMessages := lo.GroupBy(messages, func(message *Message) string {
 		return message.PartitionKey()
 	})
 
@@ -252,7 +266,7 @@ func (p *producer) sendPartitionedMessages() {
 			continue
 		}
 
-		request, ok := p.requests.Find(func(r *request) bool {
+		request, ok := lo.Find(p.requests.ToSlice(), func(r *request) bool {
 			return r.MessageProcessorId == processorId
 		})
 
@@ -266,9 +280,6 @@ func (p *producer) sendPartitionedMessages() {
 		}
 
 		request.Demand -= len(partition)
-		p.buffer = lo.Filter(p.buffer, func(m *Message, _ int) bool {
-			return !lo.Contains(partition, m)
-		})
 
 		if request.Demand <= 0 {
 			request.Close()
@@ -277,7 +288,9 @@ func (p *producer) sendPartitionedMessages() {
 	}
 }
 
-func (p *producer) terminate() {
+// Terminate closes pending requests and stops the producer.
+// After calling Terminate, the producer will no longer accept new requests.
+func (p *producer) Terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -287,19 +300,6 @@ func (p *producer) terminate() {
 
 	p.terminated = true
 	close(p.requestChan)
-}
-
-// Terminate closes pending requests and stops the producer.
-// After calling Terminate, the producer will no longer accept new requests.
-func (p *producer) Terminate() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.terminating {
-		return
-	}
-
-	p.terminating = true
 }
 
 func (p *producer) OnDrained() <-chan bool {
@@ -316,8 +316,4 @@ func (p *producer) IsDrained() bool {
 
 func (p *producer) IsTerminated() bool {
 	return p.terminated
-}
-
-func (p *producer) BufferCount() int {
-	return len(p.buffer)
 }

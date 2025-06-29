@@ -1,21 +1,23 @@
 package broadway
 
-import "sync"
+import (
+	"sync"
+)
 
 type request struct {
 	Demand             int
-	Response           chan []*Message
 	MessageProcessorId string
 
-	closed bool
-	mu     sync.Mutex
+	response chan []*Message
+	closed   bool
+	mu       sync.Mutex
 }
 
 func newRequest(messageProcessorId string, demand int) *request {
 	return &request{
 		Demand:             demand,
-		Response:           make(chan []*Message),
 		MessageProcessorId: messageProcessorId,
+		response:           make(chan []*Message),
 		mu:                 sync.Mutex{},
 	}
 }
@@ -35,7 +37,7 @@ func (r *request) Close() {
 	}
 
 	r.closed = true
-	close(r.Response)
+	close(r.response)
 }
 
 func (r *request) Reply(messages []*Message) bool {
@@ -46,7 +48,11 @@ func (r *request) Reply(messages []*Message) bool {
 		return false
 	}
 
-	r.Response <- messages
+	r.response <- messages
 
 	return true
+}
+
+func (r *request) Response() <-chan []*Message {
+	return r.response
 }

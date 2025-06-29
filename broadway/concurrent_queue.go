@@ -94,16 +94,6 @@ func (q *concurrentQueue[T]) DequeueAll() ([]T, bool) {
 	return items, len(items) > 0
 }
 
-// IsEmpty checks if the queue is empty.
-//
-// Returns:
-//   - true if the queue contains no items, false otherwise
-func (q *concurrentQueue[T]) IsEmpty() bool {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-	return len(q.queue) == 0
-}
-
 // Len returns the number of items currently in the queue.
 //
 // Returns:

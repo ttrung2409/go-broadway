@@ -110,7 +110,6 @@ func (p *messageProcessor) Run(ctx context.Context) {
 				p.flushAndFailAll(r)
 				p.Terminate()
 			} else {
-				p.requestBuffered()
 				p.flush(ctx)
 			}
 
@@ -143,27 +142,6 @@ func (p *messageProcessor) Run(ctx context.Context) {
 			p.process(messages, ctx)
 		}
 	}()
-
-}
-
-func (p *messageProcessor) requestBuffered() {
-	for {
-
-		producersWithBufferedMessages := lo.Filter(
-			p.producers.Values(),
-			func(producer *producer, _ int) bool {
-				return producer.BufferCount() > 0
-			},
-		)
-
-		if len(producersWithBufferedMessages) == 0 {
-			return
-		}
-
-		p.request(producersWithBufferedMessages...)
-
-		time.Sleep(time.Millisecond * 100)
-	}
 
 }
 
@@ -332,7 +310,7 @@ func (p *messageProcessor) request(producers ...*producer) {
 		p.pendingRequests.Set(producer.Id, r)
 
 		go func(r *request, producerId string) {
-			for messages := range r.Response {
+			for messages := range r.Response() {
 				p.messages.Enqueue(messages...)
 			}
 
