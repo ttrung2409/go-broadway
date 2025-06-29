@@ -155,7 +155,7 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 			}
 
 			total := min((p.config.MaxDemand+p.config.MinDemand)/2, p.messages.len())
-			messages, ok := p.messages.dequeueMany(total)
+			messages, ok := p.messages.dequeue(total)
 
 			if !ok {
 				time.Sleep(time.Millisecond * 100)

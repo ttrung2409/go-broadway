@@ -87,18 +87,6 @@ func (m *concurrentMap[K, V]) reset(new map[K]V) {
 	}
 }
 
-func (m *concurrentMap[K, V]) keys() []K {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	keys := make([]K, 0)
-	for k := range m.data {
-		keys = append(keys, k)
-	}
-
-	return keys
-}
-
 func (m *concurrentMap[K, V]) values() []V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

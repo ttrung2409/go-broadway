@@ -38,25 +38,7 @@ func (q *concurrentQueue[T]) prepend(items ...T) {
 	q.queue = append(items, q.queue...)
 }
 
-// dequeue removes and returns the first item in the queue.
-//
-// Returns:
-//   - The first item in the queue
-//   - true if an item was successfully dequeued, false otherwise
-func (q *concurrentQueue[T]) dequeue() (T, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.queue) == 0 {
-		var zeroValue T
-		return zeroValue, false
-	}
-
-	item := q.queue[0]
-	q.queue = q.queue[1:]
-	return item, true
-}
-
-// dequeueMany removes and returns up to 'total' items from the queue.
+// dequeue removes and returns up to 'total' items from the queue.
 // If the queue contains fewer than 'total' items, all available items are returned.
 //
 // Parameters:
@@ -65,7 +47,7 @@ func (q *concurrentQueue[T]) dequeue() (T, bool) {
 // Returns:
 //   - A slice containing the dequeued items (may be fewer than requested)
 //   - true if at least one item was dequeued, false otherwise
-func (q *concurrentQueue[T]) dequeueMany(total int) ([]T, bool) {
+func (q *concurrentQueue[T]) dequeue(total int) ([]T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

@@ -136,33 +136,6 @@ func (hr *hashRing[N]) getNextNode(node N) (N, bool) {
 	return hr.nodes[i], true
 }
 
-// getPrevNode returns the previous node in the hash ring before the given node.
-//
-// Parameters:
-//   - node: The node for which to find the previous node in the ring
-//
-// Returns:
-//   - The previous node in the hash ring
-//   - true if a previous node was found, false otherwise
-func (hr *hashRing[N]) getPrevNode(node N) (N, bool) {
-	if len(hr.nodes) == 0 {
-		var zero N
-		return zero, false
-	}
-
-	hash := hashString(node.toString())
-
-	i := sort.Search(len(hr.nodes), func(i int) bool {
-		return hashString(hr.nodes[i].toString()) >= hash
-	})
-
-	if i == 0 {
-		return hr.nodes[len(hr.nodes)-1], true
-	}
-
-	return hr.nodes[i-1], true
-}
-
 // getAllNodes returns all nodes currently in the hash ring.
 //
 // Returns:

@@ -234,7 +234,7 @@ func (b *internalBatcher) processBatches() {
 		select {
 		case <-ticker.C:
 			for batchKey, messages := range b.messages.toMap() {
-				if batch, ok := messages.dequeueMany(b._config.BatchSize); ok {
+				if batch, ok := messages.dequeue(b._config.BatchSize); ok {
 					if !b.processBatch(batchKey, batch) {
 						messages.prepend(batch...)
 					}
@@ -245,7 +245,7 @@ func (b *internalBatcher) processBatches() {
 			// Check for any batches that have reached the batch size threshold
 			for batchKey, messages := range b.messages.toMap() {
 				if messages.len() >= b._config.BatchSize {
-					if batch, ok := messages.dequeueMany(b._config.BatchSize); ok {
+					if batch, ok := messages.dequeue(b._config.BatchSize); ok {
 						if !b.processBatch(batchKey, batch) {
 							messages.prepend(batch...)
 						}
