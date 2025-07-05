@@ -25,14 +25,17 @@ type batchingTestProducer struct {
 	count int
 }
 
-func (p *batchingTestProducer) New() broadway.Producer {
+func (p *batchingTestProducer) Clone() broadway.Producer {
 	return &batchingTestProducer{}
 }
 
 const batchingTestTotalMessages = 100
 const batchingTestTotalUsers = 10
 
-func (p *batchingTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
+func (p *batchingTestProducer) HandleDemand(
+	demand int,
+	ctx context.Context,
+) []broadway.MessagePayload {
 	result := make([]broadway.MessagePayload, 0)
 	actions := []string{"view", "click", "purchase"}
 
@@ -67,7 +70,7 @@ func (p *batchingTestProducer) HandleDemand(demand int) []broadway.MessagePayloa
 type batchingTestMessageProcessor struct {
 }
 
-func (p *batchingTestMessageProcessor) New() broadway.MessageProcessor {
+func (p *batchingTestMessageProcessor) Clone() broadway.MessageProcessor {
 	return &batchingTestMessageProcessor{}
 }
 
@@ -84,7 +87,7 @@ type batchingTestBatchProcessor struct {
 	Id string
 }
 
-func (p *batchingTestBatchProcessor) New() broadway.BatchProcessor {
+func (p *batchingTestBatchProcessor) Clone() broadway.BatchProcessor {
 	return &batchingTestBatchProcessor{
 		Id: uuid.NewString(),
 	}
@@ -139,7 +142,7 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 			Processor:   &batchingTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -199,7 +202,7 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 			Processor:   &batchingTestMessageProcessor{},
 			Concurrency: 1,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -226,7 +229,7 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 type multiBatcherMessageProcessor struct {
 }
 
-func (p *multiBatcherMessageProcessor) New() broadway.MessageProcessor {
+func (p *multiBatcherMessageProcessor) Clone() broadway.MessageProcessor {
 	return &multiBatcherMessageProcessor{}
 }
 
@@ -244,7 +247,7 @@ type multiBatcherBatchProcessor struct {
 	Id string
 }
 
-func (p *multiBatcherBatchProcessor) New() broadway.BatchProcessor {
+func (p *multiBatcherBatchProcessor) Clone() broadway.BatchProcessor {
 	return &multiBatcherBatchProcessor{Id: uuid.NewString()}
 }
 
@@ -261,7 +264,7 @@ func (p *multiBatcherBatchProcessor) Handle(
 	return messages, nil
 }
 
-func MultiBatcher_TestMessagesRoutedToSameBatcher(t *testing.T) {
+func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 	acknowledger := func(messages []*broadway.Message, err error) {
 		for _, message := range messages {
 			assert.Equal(
@@ -285,7 +288,7 @@ func MultiBatcher_TestMessagesRoutedToSameBatcher(t *testing.T) {
 			Processor:   &multiBatcherMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{

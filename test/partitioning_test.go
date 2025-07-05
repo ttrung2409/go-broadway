@@ -23,14 +23,17 @@ type partitioningTestProducer struct {
 	count int
 }
 
-func (p *partitioningTestProducer) New() broadway.Producer {
+func (p *partitioningTestProducer) Clone() broadway.Producer {
 	return &partitioningTestProducer{}
 }
 
 const partitioningTestTotalMessages = 100
 const partitioningTestTotalUsers = 10
 
-func (p *partitioningTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
+func (p *partitioningTestProducer) HandleDemand(
+	demand int,
+	ctx context.Context,
+) []broadway.MessagePayload {
 	result := make([]broadway.MessagePayload, 0)
 	actions := []string{"view", "click", "purchase"}
 
@@ -64,7 +67,7 @@ type partitioningTestMessageProcessor struct {
 	Id string
 }
 
-func (p *partitioningTestMessageProcessor) New() broadway.MessageProcessor {
+func (p *partitioningTestMessageProcessor) Clone() broadway.MessageProcessor {
 	return &partitioningTestMessageProcessor{Id: uuid.NewString()}
 }
 
@@ -81,7 +84,7 @@ type partitioningTestBatchProcessor struct {
 	Id string
 }
 
-func (p *partitioningTestBatchProcessor) New() broadway.BatchProcessor {
+func (p *partitioningTestBatchProcessor) Clone() broadway.BatchProcessor {
 	return &partitioningTestBatchProcessor{
 		Id: uuid.NewString(),
 	}
@@ -151,7 +154,7 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 			Processor:   &partitioningTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -213,7 +216,7 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 			Processor:   &partitioningTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{

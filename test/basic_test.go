@@ -25,14 +25,17 @@ type basicTestProducer struct {
 	fixedDemand   int
 }
 
-func (p *basicTestProducer) New() broadway.Producer {
+func (p *basicTestProducer) Clone() broadway.Producer {
 	return &basicTestProducer{totalFailed: p.totalFailed, fixedDemand: p.fixedDemand}
 }
 
 const basicTestTotalMessages = 100
 const basicTestTotalUsers = 10
 
-func (p *basicTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
+func (p *basicTestProducer) HandleDemand(
+	demand int,
+	ctx context.Context,
+) []broadway.MessagePayload {
 
 	result := make([]broadway.MessagePayload, 0)
 
@@ -75,7 +78,7 @@ func (p *basicTestProducer) HandleDemand(demand int) []broadway.MessagePayload {
 
 type basicTestMessageProcessor struct{}
 
-func (p *basicTestMessageProcessor) New() broadway.MessageProcessor {
+func (p *basicTestMessageProcessor) Clone() broadway.MessageProcessor {
 	return &basicTestMessageProcessor{}
 }
 
@@ -97,7 +100,7 @@ func (p *basicTestMessageProcessor) Handle(
 
 type basicTestBatchProcessor struct{}
 
-func (p *basicTestBatchProcessor) New() broadway.BatchProcessor {
+func (p *basicTestBatchProcessor) Clone() broadway.BatchProcessor {
 	return &basicTestBatchProcessor{}
 }
 
@@ -144,7 +147,7 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 			Processor:   &basicTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Acknowledger: acknowledger,
 	})
@@ -190,7 +193,7 @@ func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
 			Processor:   &basicTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -239,7 +242,7 @@ func TestGracefulShutdown(t *testing.T) {
 			Processor:   &basicTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Acknowledger: acknowledger,
 	})
@@ -279,7 +282,7 @@ func TestGracefulShutdown_WithBatching(t *testing.T) {
 			Processor:   &basicTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
-			MaxDemand:   100,
+			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
