@@ -12,7 +12,7 @@ type UserSessionTracker struct {
 	userSessions map[string]*UserSession
 }
 
-func (t *UserSessionTracker) New() broadway.BatchProcessor {
+func (t *UserSessionTracker) Clone() broadway.BatchProcessor {
 	return &UserSessionTracker{
 		userSessions: make(map[string]*UserSession),
 	}

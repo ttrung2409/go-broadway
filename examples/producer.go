@@ -1,6 +1,7 @@
 package examples
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -15,7 +16,7 @@ type ActivityProducer struct {
 	actions []string
 }
 
-func (p *ActivityProducer) New() broadway.Producer {
+func (p *ActivityProducer) Clone() broadway.Producer {
 	// Create 10 sample users
 	userIDs := make([]string, 10)
 	for i := 0; i < 10; i++ {
@@ -38,7 +39,7 @@ func (p *ActivityProducer) New() broadway.Producer {
 }
 
 // HandleDemand implements the basic Producer interface
-func (p *ActivityProducer) HandleDemand(demand int) []broadway.MessagePayload {
+func (p *ActivityProducer) HandleDemand(demand int, ctx context.Context) []broadway.MessagePayload {
 	result := make([]broadway.MessagePayload, 0, demand)
 
 	for i := 0; i < demand; i++ {

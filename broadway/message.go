@@ -10,7 +10,8 @@ type Message struct {
 	BatchKey     string
 	PartitionKey string
 
-	ack Acknowledger
+	ack   Acknowledger
+	acked bool
 }
 
 type messageArgs struct {

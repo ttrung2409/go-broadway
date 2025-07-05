@@ -10,7 +10,6 @@ import (
 )
 
 type BatchProcessor interface {
-	New() BatchProcessor
 
 	// Handle processes a batch of messages and returns the processed messages
 	// along with any error that occurred during processing. The returned messages
@@ -24,6 +23,8 @@ type BatchProcessor interface {
 	//   - The processed messages for acknowledgment
 	//   - An error if processing failed, or nil if successful.
 	Handle(messages []*Message, ctx context.Context) ([]*Message, error)
+
+	Clone() BatchProcessor
 }
 
 type batchProcessor interface {
@@ -73,7 +74,7 @@ type internalBatchProcessor struct {
 func newBatchProcessor(p BatchProcessor) batchProcessor {
 	return &internalBatchProcessor{
 		id:            uuid.NewString(),
-		processor:     p.New(),
+		processor:     p.Clone(),
 		receiver:      make(chan []*Message),
 		mu:            sync.Mutex{},
 		_onTerminated: make(chan any),

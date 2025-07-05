@@ -57,7 +57,7 @@ func (s *internalProducerSupervisor) run(
 ) map[string]producer {
 
 	for i := 0; i < s.config.Concurrency; i++ {
-		p := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
+		p := newProducer(s.config.Producer, s.config, s.messageProcessorResolver, s.messageAck)
 		s.producers.set(p.id(), p)
 		p.run(ctx)
 
@@ -86,7 +86,7 @@ func (s *internalProducerSupervisor) terminate() {
 //   - ctx: The context provided when starting the pipeline.
 func (s *internalProducerSupervisor) handleProducerPanic(p producer, ctx context.Context) {
 	s.producers.delete(p.id())
-	newProducer := newProducer(s.config, s.messageProcessorResolver, s.messageAck)
+	newProducer := newProducer(p.producer(), s.config, s.messageProcessorResolver, s.messageAck)
 	s.producers.set(newProducer.id(), newProducer)
 	newProducer.run(ctx)
 

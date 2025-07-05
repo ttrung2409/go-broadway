@@ -9,11 +9,14 @@ import (
 type ActivityProcessor struct {
 }
 
-func (p *ActivityProcessor) New() broadway.MessageProcessor {
+func (p *ActivityProcessor) Clone() broadway.MessageProcessor {
 	return &ActivityProcessor{}
 }
 
-func (p *ActivityProcessor) Handle(message *broadway.Message, ctx context.Context) (*broadway.Message, error) {
+func (p *ActivityProcessor) Handle(
+	message *broadway.Message,
+	ctx context.Context,
+) (*broadway.Message, error) {
 
 	message.Batcher = "session_tracker"
 	return message, nil

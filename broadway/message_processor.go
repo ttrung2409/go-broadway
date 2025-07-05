@@ -24,8 +24,6 @@ type MessageProcessorConfig struct {
 }
 
 type MessageProcessor interface {
-	New() MessageProcessor
-
 	// Handle processes a single message and returns the processed message
 	// along with any error that occurred during processing.
 	//
@@ -37,6 +35,8 @@ type MessageProcessor interface {
 	//   - The processed message
 	//   - An error if processing failed, or nil if successful.
 	Handle(message *Message, ctx context.Context) (*Message, error)
+
+	Clone() MessageProcessor
 }
 
 type messageProcessor interface {
@@ -78,11 +78,13 @@ type messageProcessor interface {
 
 	// toString returns a string representation of this message processor.
 	toString() string
+
+	processor() MessageProcessor
 }
 
 type internalMessageProcessor struct {
 	_id             string
-	processor       MessageProcessor
+	_processor      MessageProcessor
 	config          MessageProcessorConfig
 	messages        *concurrentQueue[*Message]
 	pendingRequests *concurrentMap[string, *request]
@@ -95,6 +97,7 @@ type internalMessageProcessor struct {
 }
 
 func newMessageProcessor(
+	processor MessageProcessor,
 	config MessageProcessorConfig,
 	producers map[string]producer,
 	batchers map[string]batcher,
@@ -108,8 +111,8 @@ func newMessageProcessor(
 	}
 
 	return &internalMessageProcessor{
-		_id:             uuid.New().String(),
-		processor:       config.Processor.New(),
+		_id:             uuid.NewString(),
+		_processor:      processor.Clone(),
 		config:          config,
 		messages:        newConcurrentQueue[*Message](),
 		pendingRequests: newConcurrentMap[string, *request](),
@@ -123,7 +126,17 @@ func newMessageProcessor(
 func (p *internalMessageProcessor) run(ctx context.Context) {
 
 	go func() {
+		ongoingMessages := []*Message{}
+
 		defer func() {
+			if len(ongoingMessages) > 0 {
+				unackedMessages := lo.Filter(ongoingMessages, func(message *Message, _ int) bool {
+					return !message.acked
+				})
+
+				p.messages.prepend(unackedMessages...)
+			}
+
 			r := recover()
 
 			if r != nil {
@@ -146,6 +159,8 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 		}()
 
 		for {
+			ongoingMessages = []*Message{}
+
 			if p.terminated {
 				return
 			}
@@ -154,7 +169,7 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 				p.request(p.producers.values()...)
 			}
 
-			total := min((p.config.MaxDemand+p.config.MinDemand)/2, p.messages.len())
+			total := min(p.config.MaxDemand-p.config.MinDemand, p.messages.len())
 			messages, ok := p.messages.dequeue(total)
 
 			if !ok {
@@ -162,7 +177,8 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 				continue
 			}
 
-			p.process(messages, ctx)
+			ongoingMessages = messages
+			ongoingMessages = p.process(ongoingMessages, ctx)
 		}
 	}()
 
@@ -226,11 +242,11 @@ func (p *internalMessageProcessor) flushAndFailAll(r any) {
 // Parameters:
 //   - messages: A slice of messages to be processed.
 //   - ctx: The context provided when starting the pipeline.
-func (p *internalMessageProcessor) process(messages []*Message, ctx context.Context) {
+func (p *internalMessageProcessor) process(messages []*Message, ctx context.Context) []*Message {
 	hasBatchers := p.batchers.len() > 0
 
 	messages = lo.Map(messages, func(message *Message, _ int) *Message {
-		processedMessage, err := p.processor.Handle(message, ctx)
+		processedMessage, err := p._processor.Handle(message, ctx)
 
 		if processedMessage == nil {
 			processedMessage = message
@@ -250,6 +266,7 @@ func (p *internalMessageProcessor) process(messages []*Message, ctx context.Cont
 
 		if (!hasBatchers || err != nil) && processedMessage.ack != nil {
 			processedMessage.ack([]*Message{processedMessage}, err)
+			processedMessage.acked = true
 		}
 
 		if err != nil {
@@ -264,11 +281,13 @@ func (p *internalMessageProcessor) process(messages []*Message, ctx context.Cont
 	})
 
 	if hasBatchers {
-		p.sendToBatcher(messages)
+		messages = p.sendToBatcher(messages)
 	}
+
+	return messages
 }
 
-func (p *internalMessageProcessor) sendToBatcher(messages []*Message) {
+func (p *internalMessageProcessor) sendToBatcher(messages []*Message) []*Message {
 	messagesByBatchers := lo.GroupBy(messages, func(message *Message) string {
 		return message.Batcher
 	})
@@ -292,6 +311,10 @@ func (p *internalMessageProcessor) sendToBatcher(messages []*Message) {
 						)
 					}
 
+					for _, message := range messagesInBatcher {
+						message.acked = true
+					}
+
 					break
 				}
 
@@ -305,6 +328,8 @@ func (p *internalMessageProcessor) sendToBatcher(messages []*Message) {
 			}
 		}
 	}
+
+	return messages
 }
 
 // request sends requests to the producers to obtain more messages.
@@ -361,4 +386,8 @@ func (p *internalMessageProcessor) isTerminated() bool {
 
 func (p *internalMessageProcessor) id() string {
 	return p._id
+}
+
+func (p *internalMessageProcessor) processor() MessageProcessor {
+	return p._processor
 }
