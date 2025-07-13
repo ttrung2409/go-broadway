@@ -40,10 +40,10 @@ func (s *concurrentSlice[T]) add(items ...T) {
 // Returns:
 //   - A new concurrent slice after filtering
 func (s *concurrentSlice[T]) filter(predicate func(item T) bool) *concurrentSlice[T] {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	filtered := make([]T, 0)
+	filtered := []T{}
 
 	for _, item := range s.items {
 		if predicate(item) {
@@ -51,10 +51,9 @@ func (s *concurrentSlice[T]) filter(predicate func(item T) bool) *concurrentSlic
 		}
 	}
 
-	return &concurrentSlice[T]{
-		items: filtered,
-		mu:    sync.RWMutex{},
-	}
+	s.items = filtered
+
+	return s
 }
 
 // len returns the number of items currently in the slice.
