@@ -2,53 +2,73 @@ package test
 
 import (
 	"context"
-	"fmt"
+	"hash/fnv"
 	"sync"
-	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/ttrung2409/go-broadway/broadway"
 )
 
-const faultTolerantTestTotalMessages = 100
+const faultToleranceTestTotalMessages = 100
+const faultToleranceTestTotalUsers = 10
 
 var (
-	producedCount                  int
-	panickedMessageProcessorsCount int32
+	producedCount int
 )
 
-type faultTolerantTestProducer struct {
+type faultToleranceTestMessage struct {
+	UserId string
+	Order  int
+}
+
+type faultToleranceTestProducer struct {
 	shouldPanic bool
 	panicked    bool
 }
 
-func (p *faultTolerantTestProducer) Clone() broadway.Producer {
-	return &faultTolerantTestProducer{shouldPanic: p.shouldPanic && !p.panicked}
+func newFaultTolerantTestProducer(shouldPanic bool) *faultToleranceTestProducer {
+	producedCount = 0
+
+	return &faultToleranceTestProducer{
+		shouldPanic: shouldPanic,
+	}
 }
 
-func (p *faultTolerantTestProducer) HandleDemand(
+func (p *faultToleranceTestProducer) Clone() broadway.Producer {
+	return &faultToleranceTestProducer{shouldPanic: p.shouldPanic && !p.panicked}
+}
+
+func (p *faultToleranceTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
 ) []broadway.MessagePayload {
 
-	if producedCount > faultTolerantTestTotalMessages {
+	if producedCount > faultToleranceTestTotalMessages {
 		return []broadway.MessagePayload{}
 	}
 
-	if p.shouldPanic && producedCount > faultTolerantTestTotalMessages/2 {
+	if p.shouldPanic && producedCount > faultToleranceTestTotalMessages/2 {
 		p.panicked = true
 		panic("test producer recovery")
 	}
 
-	demand = min(demand, faultTolerantTestTotalMessages-producedCount)
+	demand = min(demand, faultToleranceTestTotalMessages-producedCount)
+	userIds := make([]string, 0)
+	for i := 0; i < faultToleranceTestTotalUsers; i++ {
+		userIds = append(userIds, uuid.NewString())
+	}
 
 	result := []broadway.MessagePayload{}
 
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			fmt.Sprintf("message %d", producedCount),
+			&faultToleranceTestMessage{
+				UserId: userIds[producedCount%faultToleranceTestTotalUsers],
+				Order:  producedCount,
+			},
 		)
 
 		producedCount++
@@ -57,29 +77,30 @@ func (p *faultTolerantTestProducer) HandleDemand(
 	return result
 }
 
-type faultTolerantTestMessageProcessor struct {
+type faultToleranceTestMessageProcessor struct {
 	shouldPanic bool
 	panicked    bool
 }
 
-func (p *faultTolerantTestMessageProcessor) Clone() broadway.MessageProcessor {
-	return &faultTolerantTestMessageProcessor{shouldPanic: p.shouldPanic && !p.panicked}
+func (p *faultToleranceTestMessageProcessor) Clone() broadway.MessageProcessor {
+	return &faultToleranceTestMessageProcessor{shouldPanic: p.shouldPanic && !p.panicked}
 }
 
-func (p *faultTolerantTestMessageProcessor) Handle(
+func (p *faultToleranceTestMessageProcessor) Handle(
 	message *broadway.Message,
 	ctx context.Context,
 ) (*broadway.Message, error) {
-	if p.shouldPanic && atomic.LoadInt32(&panickedMessageProcessorsCount) < 2 {
+	id := ctx.Value(broadway.MessageProcessorIdContextKey).(string)
+
+	if p.shouldPanic && hashString(id)%2 == 1 {
 		p.panicked = true
-		atomic.AddInt32(&panickedMessageProcessorsCount, 1)
 		panic("test message processor recovery")
 	}
 
 	return message, nil
 }
 
-func TestProducerRecovery_MessagesProperlyAckedDespiteProducerFails(t *testing.T) {
+func TestProducerRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	mu := sync.Mutex{}
 	count := 0
 
@@ -92,11 +113,11 @@ func TestProducerRecovery_MessagesProperlyAckedDespiteProducerFails(t *testing.T
 
 	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
 		Producer: broadway.ProducerConfig{
-			Producer:    &faultTolerantTestProducer{shouldPanic: true},
+			Producer:    newFaultTolerantTestProducer(true),
 			Concurrency: 1,
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
-			Processor:   &faultTolerantTestMessageProcessor{},
+			Processor:   &faultToleranceTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
 			MaxDemand:   10,
@@ -112,11 +133,10 @@ func TestProducerRecovery_MessagesProperlyAckedDespiteProducerFails(t *testing.T
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, faultTolerantTestTotalMessages, count)
+	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
 
-func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteMessageProcessorFails(t *testing.T) {
-	producedCount = 0
+func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	mu := sync.Mutex{}
 	count := 0
 
@@ -129,11 +149,11 @@ func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteMessageProcessorFa
 
 	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
 		Producer: broadway.ProducerConfig{
-			Producer:    &faultTolerantTestProducer{},
+			Producer:    newFaultTolerantTestProducer(false),
 			Concurrency: 1,
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
-			Processor:   &faultTolerantTestMessageProcessor{shouldPanic: true},
+			Processor:   &faultToleranceTestMessageProcessor{shouldPanic: true},
 			Concurrency: 5,
 			MinDemand:   1,
 			MaxDemand:   10,
@@ -149,5 +169,82 @@ func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteMessageProcessorFa
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, faultTolerantTestTotalMessages, count)
+	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
+}
+
+func hashString(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
+}
+
+func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFailure(
+	t *testing.T,
+) {
+	lastProcessedMessageByPartitionKey := make(map[string]*broadway.Message)
+	mu := &sync.Mutex{}
+	processedCount := 0
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		processedCount += len(messages)
+
+		for _, message := range messages {
+			payload := message.Payload.(*faultToleranceTestMessage)
+			partitionKey := payload.UserId
+
+			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
+				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				currentOrder := payload.Order
+
+				assert.Less(
+					t,
+					lastOrder,
+					currentOrder,
+					"messages with partition key %s were processed out of order: %d before %d",
+					partitionKey,
+					lastOrder,
+					currentOrder)
+
+			}
+
+			lastProcessedMessageByPartitionKey[partitionKey] = message
+		}
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    newFaultTolerantTestProducer(false),
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &faultToleranceTestMessageProcessor{shouldPanic: true},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		PartitionBy: func(payload broadway.MessagePayload) string {
+			return payload.(*faultToleranceTestMessage).UserId
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+	assert.Equal(
+		t,
+		faultToleranceTestTotalMessages,
+		processedCount,
+		"not all messages were processed",
+	)
+
 }
