@@ -162,8 +162,8 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, basicTestTotalMessages/2, successfulCount)
-	assert.Equal(t, basicTestTotalMessages/2, failedCount)
+	assert.Equal(t, basicTestTotalMessages/2, successfulCount, "successful messages are missing")
+	assert.Equal(t, basicTestTotalMessages/2, failedCount, "failed messages are missing")
 }
 
 func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
@@ -216,8 +216,63 @@ func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, basicTestTotalMessages/2, successfulCount)
-	assert.Equal(t, basicTestTotalMessages/2, failedCount)
+	assert.Equal(
+		t,
+		basicTestTotalMessages/2,
+		successfulCount,
+		"successful messages are missing",
+	)
+	assert.Equal(t, basicTestTotalMessages/2, failedCount, "failed messages are missing")
+}
+
+func TestMessagesProperlyProcessedAndAcked_WithPartitioning(t *testing.T) {
+	var (
+		processedCount int
+		mu             sync.Mutex
+	)
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		processedCount += len(messages)
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    &basicTestProducer{},
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &basicTestMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &basicTestBatchProcessor{},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		PartitionBy: func(payload broadway.MessagePayload) string {
+			return payload.(basicTestMessage).UserId
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.OnProducerDrained()
+
+	cancel()
+
+	<-pipeline.OnTerminated()
+
+	assert.Equal(t, basicTestTotalMessages, processedCount, "not all messages were processed")
 }
 
 func TestGracefulShutdown(t *testing.T) {
@@ -257,7 +312,7 @@ func TestGracefulShutdown(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, basicTestTotalMessages*5, count)
+	assert.Equal(t, basicTestTotalMessages*5, count, "not all messages were processed")
 }
 
 func TestGracefulShutdown_WithBatching(t *testing.T) {
@@ -305,5 +360,5 @@ func TestGracefulShutdown_WithBatching(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
-	assert.Equal(t, basicTestTotalMessages*5, count)
+	assert.Equal(t, basicTestTotalMessages*5, count, "not all messages were processed")
 }

@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	defaultBatcherName = "default"
-	defaultBatchKey    = "default"
+	defaultBatcherName  = "default"
+	defaultBatchKey     = "default"
+	defaultBatchSize    = 100
+	defaultBatchTimeout = 3 * time.Second
 )
 
 type BatcherConfig struct {
@@ -75,11 +77,11 @@ func newBatcher(config BatcherConfig) batcher {
 	}
 
 	if config.BatchSize == 0 {
-		config.BatchSize = 100
+		config.BatchSize = defaultBatchSize
 	}
 
 	if config.BatchTimeout == 0 {
-		config.BatchTimeout = time.Second
+		config.BatchTimeout = defaultBatchTimeout
 	}
 
 	return &internalBatcher{

@@ -107,10 +107,13 @@ func (p *batchingTestBatchProcessor) Handle(
 func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 	batchProcessorsByBatchKey := make(map[string]string)
 	mu := &sync.Mutex{}
+	processedCount := 0
 
 	acknowledger := func(messages []*broadway.Message, err error) {
 		mu.Lock()
 		defer mu.Unlock()
+
+		processedCount += len(messages)
 
 		for _, message := range messages {
 			payload := message.Payload.(*batchingTestMessage)
@@ -140,9 +143,9 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
 			Processor:   &batchingTestMessageProcessor{},
-			Concurrency: 5,
+			Concurrency: 1,
 			MinDemand:   1,
-			MaxDemand:   10,
+			MaxDemand:   100,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -163,15 +166,20 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 	cancel()
 
 	<-pipeline.OnTerminated()
+
+	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }
 
 func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 	lastProcessedMessageByBatchKey := make(map[string]*broadway.Message)
 	mu := &sync.Mutex{}
+	processedCount := 0
 
 	acknowledger := func(messages []*broadway.Message, err error) {
 		mu.Lock()
 		defer mu.Unlock()
+
+		processedCount += len(messages)
 
 		for _, message := range messages {
 			payload := message.Payload.(*batchingTestMessage)
@@ -202,7 +210,7 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 			Processor:   &batchingTestMessageProcessor{},
 			Concurrency: 1,
 			MinDemand:   1,
-			MaxDemand:   10,
+			MaxDemand:   100,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -224,6 +232,7 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
+	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }
 
 type multiBatcherMessageProcessor struct {
@@ -265,7 +274,15 @@ func (p *multiBatcherBatchProcessor) Handle(
 }
 
 func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
+	mu := &sync.Mutex{}
+	processedCount := 0
+
 	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		processedCount += len(messages)
+
 		for _, message := range messages {
 			assert.Equal(
 				t,
@@ -286,9 +303,9 @@ func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
 			Processor:   &multiBatcherMessageProcessor{},
-			Concurrency: 5,
+			Concurrency: 1,
 			MinDemand:   1,
-			MaxDemand:   10,
+			MaxDemand:   100,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
@@ -317,4 +334,6 @@ func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 	cancel()
 
 	<-pipeline.OnTerminated()
+
+	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }

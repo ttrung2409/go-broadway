@@ -105,10 +105,13 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 	messageProcessorsByPartitionKey := make(map[string]string)
 	batchProcessorsByPartitionKey := make(map[string]string)
 	mu := sync.Mutex{}
+	processedCount := 0
 
 	acknowledger := func(messages []*broadway.Message, err error) {
 		mu.Lock()
 		defer mu.Unlock()
+
+		processedCount += len(messages)
 
 		for _, message := range messages {
 			payload := message.Payload.(*partitioningTestMessage)
@@ -178,15 +181,25 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 	cancel()
 
 	<-pipeline.OnTerminated()
+
+	assert.Equal(
+		t,
+		partitioningTestTotalMessages,
+		processedCount,
+		"not all messages were processed",
+	)
 }
 
 func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 	lastProcessedMessageByPartitionKey := make(map[string]*broadway.Message)
 	mu := &sync.Mutex{}
+	processedCount := 0
 
 	acknowledger := func(messages []*broadway.Message, err error) {
 		mu.Lock()
 		defer mu.Unlock()
+
+		processedCount += len(messages)
 
 		for _, message := range messages {
 			payload := message.Payload.(*partitioningTestMessage)
@@ -241,4 +254,10 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 
 	<-pipeline.OnTerminated()
 
+	assert.Equal(
+		t,
+		partitioningTestTotalMessages,
+		processedCount,
+		"not all messages were processed",
+	)
 }
