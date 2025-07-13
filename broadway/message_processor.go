@@ -12,15 +12,15 @@ import (
 )
 
 const (
-	defaultMinDemand = 5
-	defaultMaxDemand = 10
+	defaultMinDemand = 10
+	defaultMaxDemand = 100
 )
 
 type MessageProcessorConfig struct {
 	Concurrency int              // Number of concurrent message processor workers (default: 1)
 	Processor   MessageProcessor // The processor implementation that processes messages
-	MinDemand   int              // Minimum number of messages to request from producers (default: 5)
-	MaxDemand   int              // Maximum number of messages to request from producers (default: 10)
+	MinDemand   int              // Minimum number of messages to request from producers (default: 10)
+	MaxDemand   int              // Maximum number of messages to request from producers (default: 100)
 }
 
 type MessageProcessor interface {
@@ -165,6 +165,11 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 				return
 			}
 
+			if p.paused {
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+
 			if p.messages.len() < p.config.MinDemand {
 				p.request(p.producers.values()...)
 			}
@@ -198,6 +203,15 @@ func (p *internalMessageProcessor) terminate() {
 func (p *internalMessageProcessor) pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.paused {
+		return
+	}
+
+	for _, request := range p.pendingRequests.values() {
+		request.close()
+	}
+
 	p.paused = true
 }
 
