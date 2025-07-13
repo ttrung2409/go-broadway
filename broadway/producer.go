@@ -215,6 +215,7 @@ func (p *internalProducer) processRequests(ctx context.Context) {
 // sendMessages distributes messages to message processors in a round-robin fashion,
 // without regard to partition keys.
 func (p *internalProducer) sendMessages(messages []*Message) {
+
 	type augmentedRequest struct {
 		request        *request
 		originalDemand int
@@ -276,34 +277,48 @@ func (p *internalProducer) sendMessages(messages []*Message) {
 // partition keys. Messages with the same partition key are guaranteed to be processed
 // by the same message processor. This ensures ordering of related messages.
 func (p *internalProducer) sendPartitionedMessages(messages []*Message) {
+
 	partitionedMessages := lo.GroupBy(messages, func(message *Message) string {
 		return message.PartitionKey
 	})
 
-	for partitionKey, partition := range partitionedMessages {
-		processorId, ok := p.messageProcessorResolver(partitionKey)
-		if !ok {
-			continue
+	for {
+
+		if len(partitionedMessages) == 0 {
+			break
 		}
 
-		request, ok := lo.Find(p.requests.toSlice(), func(r *request) bool {
-			return r.messageProcessorId == processorId
-		})
+		for partitionKey, partition := range partitionedMessages {
+			processorId, ok := p.messageProcessorResolver(partitionKey)
+			if !ok {
+				continue
+			}
 
-		if !ok {
-			continue
+			request, ok := lo.Find(p.requests.toSlice(), func(r *request) bool {
+				return r.messageProcessorId == processorId
+			})
+
+			if !ok {
+				continue
+			}
+
+			ok = request.reply(partition)
+			if !ok {
+				continue
+			}
+
+			request.demand -= len(partition)
+
+			delete(partitionedMessages, partitionKey)
 		}
 
-		ok = request.reply(partition)
-		if !ok {
-			continue
-		}
+		<-time.After(time.Millisecond * 100)
+	}
 
-		request.demand -= len(partition)
-
-		if request.demand <= 0 {
-			request.close()
-			p.requests.remove(request)
+	for _, r := range p.requests.toSlice() {
+		if r.demand <= 0 {
+			r.close()
+			p.requests.remove(r)
 		}
 	}
 }
