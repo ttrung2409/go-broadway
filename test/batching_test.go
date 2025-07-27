@@ -161,11 +161,11 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }
@@ -226,11 +226,11 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }
@@ -329,11 +329,11 @@ func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, batchingTestTotalMessages, processedCount, "not all messages were processed")
 }

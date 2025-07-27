@@ -73,7 +73,7 @@ type messageProcessor interface {
 	//   - batchers: A map of batcher names to batcher instances.
 	setBatchers(batchers map[string]batcher)
 
-	onTerminated() <-chan any
+	terminated() <-chan any
 	isTerminated() bool
 
 	// toString returns a string representation of this message processor.
@@ -91,9 +91,9 @@ type internalMessageProcessor struct {
 	producers       *concurrentMap[string, producer]
 	batchers        *concurrentMap[string, batcher]
 	paused          bool
-	terminated      bool
+	_terminated     bool
 	mu              sync.RWMutex
-	_onTerminated   chan any
+	terminatedCh    chan any
 }
 
 func newMessageProcessor(
@@ -119,7 +119,7 @@ func newMessageProcessor(
 		mu:              sync.RWMutex{},
 		producers:       newConcurrentMap(producers),
 		batchers:        newConcurrentMap(batchers),
-		_onTerminated:   make(chan any),
+		terminatedCh:    make(chan any),
 	}
 }
 
@@ -153,15 +153,15 @@ func (p *internalMessageProcessor) run(ctx context.Context) {
 				request.close()
 			}
 
-			p._onTerminated <- r
-			close(p._onTerminated)
-			p._onTerminated = nil
+			p.terminatedCh <- r
+			close(p.terminatedCh)
+			p.terminatedCh = nil
 		}()
 
 		for {
 			ongoingMessages = []*Message{}
 
-			if p.terminated {
+			if p._terminated {
 				return
 			}
 
@@ -193,11 +193,11 @@ func (p *internalMessageProcessor) terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.terminated {
+	if p._terminated {
 		return
 	}
 
-	p.terminated = true
+	p._terminated = true
 }
 
 func (p *internalMessageProcessor) pause() {
@@ -281,21 +281,18 @@ func (p *internalMessageProcessor) process(messages []*Message, ctx context.Cont
 		if (!hasBatchers || err != nil) && processedMessage.ack != nil {
 			processedMessage.ack([]*Message{processedMessage}, err)
 			processedMessage.acked = true
-		}
-
-		if err != nil {
-			return nil
+			processedMessage.error = err
 		}
 
 		return processedMessage
 	})
 
-	messages = lo.Filter(messages, func(message *Message, _ int) bool {
-		return message != nil
-	})
-
 	if hasBatchers {
-		messages = p.sendToBatcher(messages)
+		messages = p.sendToBatcher(
+			lo.Filter(messages, func(message *Message, _ int) bool {
+				return message.error == nil
+			}),
+		)
 	}
 
 	return messages
@@ -314,19 +311,19 @@ func (p *internalMessageProcessor) sendToBatcher(messages []*Message) []*Message
 
 			for {
 				if attempts > maxAttempts {
+					error := fmt.Errorf(
+						"failed to send messages to batcher %s after %d attempts",
+						batcherName,
+						maxAttempts,
+					)
+
 					if ack := messagesInBatcher[0].ack; ack != nil {
-						ack(
-							messagesInBatcher,
-							fmt.Errorf(
-								"failed to send messages to batcher %s after %d attempts",
-								batcherName,
-								maxAttempts,
-							),
-						)
+						ack(messagesInBatcher, error)
 					}
 
 					for _, message := range messagesInBatcher {
 						message.acked = true
+						message.error = error
 					}
 
 					break
@@ -390,12 +387,12 @@ func (p *internalMessageProcessor) toString() string {
 	return p._id
 }
 
-func (p *internalMessageProcessor) onTerminated() <-chan any {
-	return p._onTerminated
+func (p *internalMessageProcessor) terminated() <-chan any {
+	return p.terminatedCh
 }
 
 func (p *internalMessageProcessor) isTerminated() bool {
-	return p._onTerminated == nil
+	return p.terminatedCh == nil
 }
 
 func (p *internalMessageProcessor) id() string {

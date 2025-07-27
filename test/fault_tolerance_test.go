@@ -127,11 +127,11 @@ func TestProducerRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
@@ -163,11 +163,11 @@ func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
@@ -234,11 +234,11 @@ func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFail
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(
 		t,

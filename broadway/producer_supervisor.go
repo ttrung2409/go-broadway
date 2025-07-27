@@ -21,19 +21,19 @@ type producerSupervisor interface {
 	// This should be called when shutting down the pipeline to ensure proper cleanup.
 	terminate()
 
-	onProducersChange() <-chan map[string]producer
-	onAllProducersDrained() <-chan bool
-	onAllProducersTerminated() <-chan bool
+	producersChanged() <-chan map[string]producer
+	allProducersDrained() <-chan bool
+	allProducersTerminated() <-chan bool
 }
 
 type internalProducerSupervisor struct {
-	config                    ProducerConfig
-	producers                 *concurrentMap[string, producer]
-	messageProcessorResolver  messageProcessorResolver
-	messageAck                Acknowledger
-	_onProducersChange        chan map[string]producer
-	_onAllProducersDrained    chan bool
-	_onAllProducersTerminated chan bool
+	config                   ProducerConfig
+	producers                *concurrentMap[string, producer]
+	messageProcessorResolver messageProcessorResolver
+	messageAck               Acknowledger
+	producersChangeCh        chan map[string]producer
+	allProducersDrainedCh    chan bool
+	allProducersTerminatedCh chan bool
 }
 
 func newProducerSupervisor(
@@ -42,13 +42,13 @@ func newProducerSupervisor(
 	messageAck Acknowledger,
 ) producerSupervisor {
 	return &internalProducerSupervisor{
-		config:                    config,
-		producers:                 newConcurrentMap[string, producer](),
-		messageProcessorResolver:  messageProcessorResolver,
-		messageAck:                messageAck,
-		_onProducersChange:        make(chan map[string]producer),
-		_onAllProducersDrained:    make(chan bool),
-		_onAllProducersTerminated: make(chan bool),
+		config:                   config,
+		producers:                newConcurrentMap[string, producer](),
+		messageProcessorResolver: messageProcessorResolver,
+		messageAck:               messageAck,
+		producersChangeCh:        make(chan map[string]producer),
+		allProducersDrainedCh:    make(chan bool),
+		allProducersTerminatedCh: make(chan bool),
 	}
 }
 
@@ -74,7 +74,7 @@ func (s *internalProducerSupervisor) terminate() {
 		p.terminate()
 	}
 
-	close(s._onProducersChange)
+	close(s.producersChangeCh)
 }
 
 // handleProducerPanic is called when a producer panics. It removes the failed producer,
@@ -94,15 +94,15 @@ func (s *internalProducerSupervisor) handleProducerPanic(p producer, ctx context
 		s.watchProducerStatus(p, ctx)
 	}(newProducer)
 
-	s._onProducersChange <- s.producers.toMap()
+	s.producersChangeCh <- s.producers.toMap()
 }
 
 func (s *internalProducerSupervisor) watchProducerStatus(p producer, ctx context.Context) {
 	for {
 		select {
-		case <-p.onDrained():
+		case <-p.drained():
 			s.checkIfAllProducersDrained()
-		case panic, ok := <-p.onTerminated():
+		case panic, ok := <-p.terminated():
 			if ok {
 				if panic != nil {
 					s.handleProducerPanic(p, ctx)
@@ -127,7 +127,7 @@ func (s *internalProducerSupervisor) checkIfAllProducersDrained() {
 
 	if allDrained {
 		select {
-		case s._onAllProducersDrained <- true: // sent successfully
+		case s.allProducersDrainedCh <- true: // sent successfully
 		default: // no receiver, ignore
 		}
 	}
@@ -144,20 +144,20 @@ func (s *internalProducerSupervisor) checkIfAllProducersTerminated() {
 
 	if allTerminated {
 		select {
-		case s._onAllProducersTerminated <- true: // sent successfully
+		case s.allProducersTerminatedCh <- true: // sent successfully
 		default: // no receiver, ignore
 		}
 	}
 }
 
-func (s *internalProducerSupervisor) onAllProducersDrained() <-chan bool {
-	return s._onAllProducersDrained
+func (s *internalProducerSupervisor) allProducersDrained() <-chan bool {
+	return s.allProducersDrainedCh
 }
 
-func (s *internalProducerSupervisor) onProducersChange() <-chan map[string]producer {
-	return s._onProducersChange
+func (s *internalProducerSupervisor) producersChanged() <-chan map[string]producer {
+	return s.producersChangeCh
 }
 
-func (s *internalProducerSupervisor) onAllProducersTerminated() <-chan bool {
-	return s._onAllProducersTerminated
+func (s *internalProducerSupervisor) allProducersTerminated() <-chan bool {
+	return s.allProducersTerminatedCh
 }

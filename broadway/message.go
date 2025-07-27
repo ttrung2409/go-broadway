@@ -12,6 +12,7 @@ type Message struct {
 
 	ack   Acknowledger
 	acked bool
+	error error
 }
 
 type messageArgs struct {

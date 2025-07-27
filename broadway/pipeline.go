@@ -32,8 +32,8 @@ type PipelineConfig struct {
 type Pipeline struct {
 	config            PipelineConfig
 	terminated        bool
-	onProducerDrained chan bool
-	onTerminated      chan bool
+	producerDrainedCh chan bool
+	terminatedCh      chan bool
 }
 
 // NewPipeline creates a new Broadway pipeline with the given configuration.
@@ -46,8 +46,8 @@ type Pipeline struct {
 func NewPipeline(config PipelineConfig) *Pipeline {
 	return &Pipeline{
 		config:            config,
-		onProducerDrained: make(chan bool),
-		onTerminated:      make(chan bool),
+		producerDrainedCh: make(chan bool),
+		terminatedCh:      make(chan bool),
 	}
 }
 
@@ -79,7 +79,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 		go func() {
 			defer func() {
-				close(p.onProducerDrained)
+				close(p.producerDrainedCh)
 			}()
 
 			for {
@@ -88,12 +88,12 @@ func (p *Pipeline) Run(ctx context.Context) {
 				}
 
 				select {
-				case producers := <-producerSupervisor.onProducersChange():
+				case producers := <-producerSupervisor.producersChanged():
 					messageProcessorSupervisor.setProducers(producers)
-				case batchers := <-batcherSupervisor.onBatchersChange():
+				case batchers := <-batcherSupervisor.batchersChanged():
 					messageProcessorSupervisor.setBatchers(batchers)
-				case <-producerSupervisor.onAllProducersDrained():
-					p.onProducerDrained <- true
+				case <-producerSupervisor.allProducersDrained():
+					p.producerDrainedCh <- true
 				}
 			}
 		}()
@@ -101,14 +101,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 		<-ctx.Done()
 
 		producerSupervisor.terminate()
-		<-producerSupervisor.onAllProducersTerminated()
+		<-producerSupervisor.allProducersTerminated()
 
 		messageProcessorSupervisor.terminate()
-		<-messageProcessorSupervisor.onAllProcessorsTerminated()
+		<-messageProcessorSupervisor.allProcessorsTerminated()
 
 		if batchers != nil {
 			batcherSupervisor.terminate()
-			<-batcherSupervisor.onAllBatchersTerminated()
+			<-batcherSupervisor.allBatchersTerminated()
 		}
 
 		p.terminate()
@@ -117,14 +117,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 func (p *Pipeline) terminate() {
 	p.terminated = true
-	p.onTerminated <- true
-	close(p.onTerminated)
+	p.terminatedCh <- true
+	close(p.terminatedCh)
 }
 
-func (p *Pipeline) OnProducerDrained() <-chan bool {
-	return p.onProducerDrained
+func (p *Pipeline) ProducerDrained() <-chan bool {
+	return p.producerDrainedCh
 }
 
-func (p *Pipeline) OnTerminated() <-chan bool {
-	return p.onTerminated
+func (p *Pipeline) Terminated() <-chan bool {
+	return p.terminatedCh
 }

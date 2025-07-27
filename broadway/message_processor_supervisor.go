@@ -50,24 +50,24 @@ type messageProcessorSupervisor interface {
 	//   - A boolean indicating whether a processor was found for the given partition key.
 	resolve(partitionKey string) (string, bool)
 
-	onAllProcessorsTerminated() <-chan bool
+	allProcessorsTerminated() <-chan bool
 }
 
 type internalMessageProcessorSupervisor struct {
-	config                     MessageProcessorConfig
-	hr                         *hashRing[messageProcessor]
-	mu                         sync.Mutex
-	_onAllProcessorsTerminated chan bool
+	config                    MessageProcessorConfig
+	hr                        *hashRing[messageProcessor]
+	mu                        sync.Mutex
+	allProcessorsTerminatedCh chan bool
 }
 
 func newMessageProcessorSupervisor(
 	config MessageProcessorConfig,
 ) messageProcessorSupervisor {
 	return &internalMessageProcessorSupervisor{
-		config:                     config,
-		hr:                         newHashRing[messageProcessor](),
-		mu:                         sync.Mutex{},
-		_onAllProcessorsTerminated: make(chan bool),
+		config:                    config,
+		hr:                        newHashRing[messageProcessor](),
+		mu:                        sync.Mutex{},
+		allProcessorsTerminatedCh: make(chan bool),
 	}
 }
 
@@ -81,7 +81,7 @@ func (s *internalMessageProcessorSupervisor) run(
 		mp.run(context.WithValue(ctx, MessageProcessorIdContextKey, mp.id()))
 
 		go func(mp messageProcessor) {
-			if panic, ok := <-mp.onTerminated(); ok {
+			if panic, ok := <-mp.terminated(); ok {
 				if panic != nil {
 					s.handleProcessorPanic(mp, producers, batchers, ctx)
 				} else {
@@ -96,6 +96,9 @@ func (s *internalMessageProcessorSupervisor) run(
 }
 
 func (s *internalMessageProcessorSupervisor) terminate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	processors := s.hr.getAllNodes()
 	for _, p := range processors {
 		p.terminate()
@@ -129,7 +132,7 @@ func (s *internalMessageProcessorSupervisor) handleProcessorPanic(
 	}
 
 	go func(p messageProcessor) {
-		if panic, ok := <-p.onTerminated(); ok {
+		if panic, ok := <-p.terminated(); ok {
 			if panic != nil {
 				s.handleProcessorPanic(p, producers, batchers, ctx)
 			} else {
@@ -163,15 +166,15 @@ func (s *internalMessageProcessorSupervisor) resolve(partitionKey string) (strin
 	return "", false
 }
 
-func (s *internalMessageProcessorSupervisor) onAllProcessorsTerminated() <-chan bool {
-	return s._onAllProcessorsTerminated
+func (s *internalMessageProcessorSupervisor) allProcessorsTerminated() <-chan bool {
+	return s.allProcessorsTerminatedCh
 }
 
 func (s *internalMessageProcessorSupervisor) checkIfAllProcessorsTerminated() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s._onAllProcessorsTerminated == nil {
+	if s.allProcessorsTerminatedCh == nil {
 		return
 	}
 
@@ -186,8 +189,8 @@ func (s *internalMessageProcessorSupervisor) checkIfAllProcessorsTerminated() {
 	}
 
 	if allTerminated {
-		s._onAllProcessorsTerminated <- true
-		close(s._onAllProcessorsTerminated)
-		s._onAllProcessorsTerminated = nil
+		s.allProcessorsTerminatedCh <- true
+		close(s.allProcessorsTerminatedCh)
+		s.allProcessorsTerminatedCh = nil
 	}
 }

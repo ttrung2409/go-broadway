@@ -57,18 +57,18 @@ type batcher interface {
 	send(messages []*Message) bool
 
 	config() BatcherConfig
-	onTerminated() <-chan any
+	terminated() <-chan any
 	isTerminated() bool
 }
 
 type internalBatcher struct {
-	_config       BatcherConfig
-	messages      *concurrentMap[string, *concurrentQueue[*Message]]
-	hr            *hashRing[batchProcessor]
-	receiver      chan []*Message
-	terminated    bool
-	mu            sync.Mutex
-	_onTerminated chan any
+	_config      BatcherConfig
+	messages     *concurrentMap[string, *concurrentQueue[*Message]]
+	hr           *hashRing[batchProcessor]
+	receiver     chan []*Message
+	_terminated  bool
+	mu           sync.Mutex
+	terminatedCh chan any
 }
 
 func newBatcher(config BatcherConfig) batcher {
@@ -85,12 +85,12 @@ func newBatcher(config BatcherConfig) batcher {
 	}
 
 	return &internalBatcher{
-		_config:       config,
-		messages:      newConcurrentMap[string, *concurrentQueue[*Message]](),
-		hr:            newHashRing[batchProcessor](),
-		receiver:      make(chan []*Message),
-		mu:            sync.Mutex{},
-		_onTerminated: make(chan any),
+		_config:      config,
+		messages:     newConcurrentMap[string, *concurrentQueue[*Message]](),
+		hr:           newHashRing[batchProcessor](),
+		receiver:     make(chan []*Message),
+		mu:           sync.Mutex{},
+		terminatedCh: make(chan any),
 	}
 }
 
@@ -101,7 +101,7 @@ func (b *internalBatcher) run(ctx context.Context) {
 		b.hr.addNode(processor)
 
 		go func(p batchProcessor) {
-			panic, ok := <-p.onTerminated()
+			panic, ok := <-p.terminated()
 
 			if ok && panic != nil {
 				b.handleProcessorPanic(p, ctx)
@@ -128,9 +128,9 @@ func (b *internalBatcher) run(ctx context.Context) {
 				processor.terminate()
 			}
 
-			b._onTerminated <- r
-			close(b._onTerminated)
-			b._onTerminated = nil
+			b.terminatedCh <- r
+			close(b.terminatedCh)
+			b.terminatedCh = nil
 		}()
 
 		for messages := range b.receiver {
@@ -154,11 +154,11 @@ func (b *internalBatcher) terminate() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.terminated {
+	if b._terminated {
 		return
 	}
 
-	b.terminated = true
+	b._terminated = true
 	close(b.receiver)
 }
 
@@ -166,7 +166,7 @@ func (b *internalBatcher) send(messages []*Message) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.terminated {
+	if b._terminated {
 		return false
 	}
 
@@ -229,7 +229,7 @@ func (b *internalBatcher) processBatches() {
 	defer ticker.Stop()
 
 	for {
-		if b.terminated {
+		if b._terminated {
 			return
 		}
 
@@ -316,7 +316,7 @@ func (b *internalBatcher) handleProcessorPanic(processor batchProcessor, ctx con
 	}
 
 	go func(p batchProcessor) {
-		panic, ok := <-p.onTerminated()
+		panic, ok := <-p.terminated()
 
 		if ok && panic != nil {
 			b.handleProcessorPanic(p, ctx)
@@ -324,12 +324,12 @@ func (b *internalBatcher) handleProcessorPanic(processor batchProcessor, ctx con
 	}(newProcessor)
 }
 
-func (b *internalBatcher) onTerminated() <-chan any {
-	return b._onTerminated
+func (b *internalBatcher) terminated() <-chan any {
+	return b.terminatedCh
 }
 
 func (b *internalBatcher) isTerminated() bool {
-	return b._onTerminated == nil
+	return b.terminatedCh == nil
 }
 
 func (b *internalBatcher) config() BatcherConfig {

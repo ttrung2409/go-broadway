@@ -176,11 +176,11 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(
 		t,
@@ -248,11 +248,11 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(
 		t,

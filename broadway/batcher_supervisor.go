@@ -21,25 +21,25 @@ type batcherSupervisor interface {
 	// terminate stops all batchers managed by this supervisor.
 	terminate()
 
-	onBatchersChange() <-chan map[string]batcher
-	onAllBatchersTerminated() <-chan bool
+	batchersChanged() <-chan map[string]batcher
+	allBatchersTerminated() <-chan bool
 }
 
 type internalBatcherSupervisor struct {
-	config                   []BatcherConfig
-	batchers                 *concurrentMap[string, batcher]
-	mu                       sync.Mutex
-	_onBatchersChange        chan map[string]batcher
-	_onAllBatchersTerminated chan bool
+	config                  []BatcherConfig
+	batchers                *concurrentMap[string, batcher]
+	mu                      sync.Mutex
+	batchersChangeCh        chan map[string]batcher
+	allBatchersTerminatedCh chan bool
 }
 
 func newBatcherSupervisor(config []BatcherConfig) batcherSupervisor {
 	return &internalBatcherSupervisor{
-		config:                   config,
-		batchers:                 newConcurrentMap[string, batcher](),
-		mu:                       sync.Mutex{},
-		_onBatchersChange:        make(chan map[string]batcher),
-		_onAllBatchersTerminated: make(chan bool),
+		config:                  config,
+		batchers:                newConcurrentMap[string, batcher](),
+		mu:                      sync.Mutex{},
+		batchersChangeCh:        make(chan map[string]batcher),
+		allBatchersTerminatedCh: make(chan bool),
 	}
 }
 
@@ -57,7 +57,7 @@ func (s *internalBatcherSupervisor) run(
 		b.run(ctx)
 
 		go func(b batcher) {
-			if panic, ok := <-b.onTerminated(); ok {
+			if panic, ok := <-b.terminated(); ok {
 				if panic != nil {
 					s.handleBatcherPanic(b, ctx)
 				} else {
@@ -76,7 +76,7 @@ func (s *internalBatcherSupervisor) terminate() {
 		b.terminate()
 	}
 
-	close(s._onBatchersChange)
+	close(s.batchersChangeCh)
 }
 
 func (s *internalBatcherSupervisor) handleBatcherPanic(b batcher, ctx context.Context) {
@@ -85,7 +85,7 @@ func (s *internalBatcherSupervisor) handleBatcherPanic(b batcher, ctx context.Co
 	newBatcher.run(ctx)
 
 	go func(b batcher) {
-		if panic, ok := <-b.onTerminated(); ok {
+		if panic, ok := <-b.terminated(); ok {
 			if panic != nil {
 				s.handleBatcherPanic(b, ctx)
 			} else {
@@ -94,18 +94,18 @@ func (s *internalBatcherSupervisor) handleBatcherPanic(b batcher, ctx context.Co
 		}
 	}(newBatcher)
 
-	s._onBatchersChange <- s.batchers.toMap()
+	s.batchersChangeCh <- s.batchers.toMap()
 }
 
-func (s *internalBatcherSupervisor) onAllBatchersTerminated() <-chan bool {
-	return s._onAllBatchersTerminated
+func (s *internalBatcherSupervisor) allBatchersTerminated() <-chan bool {
+	return s.allBatchersTerminatedCh
 }
 
 func (s *internalBatcherSupervisor) checkIfAllBatchersTerminated() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s._onAllBatchersTerminated == nil {
+	if s.allBatchersTerminatedCh == nil {
 		return
 	}
 
@@ -118,12 +118,12 @@ func (s *internalBatcherSupervisor) checkIfAllBatchersTerminated() {
 	}
 
 	if allTerminated {
-		s._onAllBatchersTerminated <- true
-		close(s._onAllBatchersTerminated)
-		s._onAllBatchersTerminated = nil
+		s.allBatchersTerminatedCh <- true
+		close(s.allBatchersTerminatedCh)
+		s.allBatchersTerminatedCh = nil
 	}
 }
 
-func (s *internalBatcherSupervisor) onBatchersChange() <-chan map[string]batcher {
-	return s._onBatchersChange
+func (s *internalBatcherSupervisor) batchersChanged() <-chan map[string]batcher {
+	return s.batchersChangeCh
 }

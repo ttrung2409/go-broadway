@@ -156,11 +156,11 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, basicTestTotalMessages/2, successfulCount, "successful messages are missing")
 	assert.Equal(t, basicTestTotalMessages/2, failedCount, "failed messages are missing")
@@ -210,11 +210,11 @@ func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(
 		t,
@@ -266,11 +266,11 @@ func TestMessagesProperlyProcessedAndAcked_WithPartitioning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, basicTestTotalMessages, processedCount, "not all messages were processed")
 }
@@ -306,11 +306,11 @@ func TestGracefulShutdown(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, basicTestTotalMessages*5, count, "not all messages were processed")
 }
@@ -354,11 +354,11 @@ func TestGracefulShutdown_WithBatching(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.OnProducerDrained()
+	<-pipeline.ProducerDrained()
 
 	cancel()
 
-	<-pipeline.OnTerminated()
+	<-pipeline.Terminated()
 
 	assert.Equal(t, basicTestTotalMessages*5, count, "not all messages were processed")
 }

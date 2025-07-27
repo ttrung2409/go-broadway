@@ -58,26 +58,26 @@ type batchProcessor interface {
 	// toString returns a string representation of this batch processor.
 	toString() string
 
-	onTerminated() <-chan any
+	terminated() <-chan any
 }
 
 type internalBatchProcessor struct {
-	id            string
-	processor     BatchProcessor
-	receiver      chan []*Message
-	mu            sync.Mutex
-	terminated    bool
-	paused        bool
-	_onTerminated chan any
+	id           string
+	processor    BatchProcessor
+	receiver     chan []*Message
+	mu           sync.Mutex
+	_terminated  bool
+	paused       bool
+	terminatedCh chan any
 }
 
 func newBatchProcessor(p BatchProcessor) batchProcessor {
 	return &internalBatchProcessor{
-		id:            uuid.NewString(),
-		processor:     p.Clone(),
-		receiver:      make(chan []*Message),
-		mu:            sync.Mutex{},
-		_onTerminated: make(chan any),
+		id:           uuid.NewString(),
+		processor:    p.Clone(),
+		receiver:     make(chan []*Message),
+		mu:           sync.Mutex{},
+		terminatedCh: make(chan any),
 	}
 }
 
@@ -121,7 +121,7 @@ func (p *internalBatchProcessor) send(batch []*Message) bool {
 		return false
 	}
 
-	if p.terminated || p.paused {
+	if p._terminated || p.paused {
 		p.mu.Unlock()
 		return false
 	}
@@ -135,11 +135,11 @@ func (p *internalBatchProcessor) terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.terminated {
+	if p._terminated {
 		return
 	}
 
-	p.terminated = true
+	p._terminated = true
 	close(p.receiver)
 }
 
@@ -159,6 +159,6 @@ func (p *internalBatchProcessor) toString() string {
 	return p.id
 }
 
-func (p *internalBatchProcessor) onTerminated() <-chan any {
-	return p._onTerminated
+func (p *internalBatchProcessor) terminated() <-chan any {
+	return p.terminatedCh
 }

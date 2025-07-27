@@ -55,8 +55,8 @@ type producer interface {
 	// After calling terminate, the producer will no longer accept new requests.
 	terminate()
 
-	onDrained() <-chan bool
-	onTerminated() <-chan any
+	drained() <-chan bool
+	terminated() <-chan any
 	isDrained() bool
 	isTerminated() bool
 
@@ -72,12 +72,12 @@ type internalProducer struct {
 	requests                 *concurrentSlice[*request]
 	requestChan              chan *request
 	mu                       sync.Mutex
-	terminated               bool
-	drained                  bool
+	_terminated              bool
+	_drained                 bool
 	messageProcessorResolver messageProcessorResolver
 	messageAck               Acknowledger
-	_onDrained               chan bool
-	_onTerminated            chan any
+	drainedCh                chan bool
+	terminatedCh             chan any
 }
 
 func newProducer(
@@ -100,8 +100,8 @@ func newProducer(
 		mu:                       sync.Mutex{},
 		messageProcessorResolver: messageProcessorResolver,
 		messageAck:               messageAck,
-		_onDrained:               make(chan bool),
-		_onTerminated:            make(chan any),
+		drainedCh:                make(chan bool),
+		terminatedCh:             make(chan any),
 	}
 }
 
@@ -126,8 +126,8 @@ func (p *internalProducer) run(ctx context.Context) {
 				request.close()
 			}
 
-			p._onTerminated <- r
-			close(p._onTerminated)
+			p.terminatedCh <- r
+			close(p.terminatedCh)
 		}()
 
 		p.processRequests(ctx)
@@ -139,7 +139,7 @@ func (p *internalProducer) send(request *request) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.terminated {
+	if p._terminated {
 		return false
 	}
 
@@ -154,7 +154,7 @@ func (p *internalProducer) processRequests(ctx context.Context) {
 
 	for {
 
-		if p.terminated {
+		if p._terminated {
 			return
 		}
 
@@ -176,7 +176,7 @@ func (p *internalProducer) processRequests(ctx context.Context) {
 		}
 
 		payloads := make([]MessagePayload, 0)
-		if !p.terminated {
+		if !p._terminated {
 			payloads = p._producer.HandleDemand(totalDemand, ctx)
 		}
 
@@ -199,11 +199,11 @@ func (p *internalProducer) processRequests(ctx context.Context) {
 			p.sendMessages(messages)
 		}
 
-		p.drained = len(messages) == 0
+		p._drained = len(messages) == 0
 
-		if p.drained {
+		if p._drained {
 			select {
-			case p._onDrained <- true: // sent successfully
+			case p.drainedCh <- true: // sent successfully
 			default: // No receiver, ignore
 			}
 		}
@@ -327,28 +327,28 @@ func (p *internalProducer) terminate() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.terminated {
+	if p._terminated {
 		return
 	}
 
-	p.terminated = true
+	p._terminated = true
 	close(p.requestChan)
 }
 
-func (p *internalProducer) onDrained() <-chan bool {
-	return p._onDrained
+func (p *internalProducer) drained() <-chan bool {
+	return p.drainedCh
 }
 
-func (p *internalProducer) onTerminated() <-chan any {
-	return p._onTerminated
+func (p *internalProducer) terminated() <-chan any {
+	return p.terminatedCh
 }
 
 func (p *internalProducer) isDrained() bool {
-	return p.drained
+	return p._drained
 }
 
 func (p *internalProducer) isTerminated() bool {
-	return p.terminated
+	return p._terminated
 }
 
 func (p *internalProducer) id() string {
