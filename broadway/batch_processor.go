@@ -27,67 +27,38 @@ type BatchProcessor interface {
 	Clone() BatchProcessor
 }
 
-type batchProcessor interface {
-	// run starts the batch processor in a goroutine with the provided context
-	//
-	// Parameters:
-	//   - ctx: The context provided when starting the pipeline.
-	run(ctx context.Context)
+type batchProcessor struct {
+	id string
 
-	// send attempts to send a batch of messages to this batch processor for processing.
-	// Returns true if the batch was accepted, false if the processor is busy, paused or terminated.
-	//
-	// Parameters:
-	//   - batch: A batch of messages to be processed.
-	//
-	// Returns:
-	//   - true if the batch was accepted, false otherwise.
-	send(batch []*Message) bool
-
-	// terminate waits for the on-going processing to be completed then terminates the processor.
-	// After calling terminate, the processor will no longer accept new batches.
-	terminate()
-
-	// pause temporarily stops the batch processor from accepting new batches.
-	// The processor will continue processing any batches already in progress.
-	pause()
-
-	// resume allows the batch processor to accept new batches after being paused.
-	resume()
-
-	// toString returns a string representation of this batch processor.
-	toString() string
-
-	terminated() <-chan any
+	_processor    BatchProcessor
+	_receiver     chan []*Message
+	_mu           sync.Mutex
+	_terminated   bool
+	_paused       bool
+	_terminatedCh chan any
 }
 
-type internalBatchProcessor struct {
-	id           string
-	processor    BatchProcessor
-	receiver     chan []*Message
-	mu           sync.Mutex
-	_terminated  bool
-	paused       bool
-	terminatedCh chan any
-}
-
-func newBatchProcessor(p BatchProcessor) batchProcessor {
-	return &internalBatchProcessor{
-		id:           uuid.NewString(),
-		processor:    p.Clone(),
-		receiver:     make(chan []*Message),
-		mu:           sync.Mutex{},
-		terminatedCh: make(chan any),
+func newBatchProcessor(p BatchProcessor) *batchProcessor {
+	return &batchProcessor{
+		id:            uuid.NewString(),
+		_processor:    p.Clone(),
+		_receiver:     make(chan []*Message),
+		_mu:           sync.Mutex{},
+		_terminatedCh: make(chan any),
 	}
 }
 
-func (p *internalBatchProcessor) run(ctx context.Context) {
+// run starts the batch processor in a goroutine with the provided context
+//
+// Parameters:
+//   - ctx: The context provided when starting the pipeline.
+func (p *batchProcessor) run(ctx context.Context) {
 
 	go func() {
-		for messages := range p.receiver {
+		for messages := range p._receiver {
 			func(messages []*Message) {
 				defer func() {
-					p.mu.Unlock()
+					p._mu.Unlock()
 
 					r := recover()
 
@@ -104,7 +75,7 @@ func (p *internalBatchProcessor) run(ctx context.Context) {
 					}
 				}()
 
-				processedMessages, err := p.processor.Handle(messages, ctx)
+				processedMessages, err := p._processor.Handle(messages, ctx)
 
 				if ack := messages[0].ack; ack != nil {
 					ack(processedMessages, err)
@@ -116,49 +87,63 @@ func (p *internalBatchProcessor) run(ctx context.Context) {
 
 }
 
-func (p *internalBatchProcessor) send(batch []*Message) bool {
-	if !p.mu.TryLock() {
+// send attempts to send a batch of messages to this batch processor for processing.
+// Returns true if the batch was accepted, false if the processor is busy, paused or terminated.
+//
+// Parameters:
+//   - batch: A batch of messages to be processed.
+//
+// Returns:
+//   - true if the batch was accepted, false otherwise.
+func (p *batchProcessor) send(batch []*Message) bool {
+	if !p._mu.TryLock() {
 		return false
 	}
 
-	if p._terminated || p.paused {
-		p.mu.Unlock()
+	if p._terminated || p._paused {
+		p._mu.Unlock()
 		return false
 	}
 
-	p.receiver <- batch
+	p._receiver <- batch
 
 	return true
 }
 
-func (p *internalBatchProcessor) terminate() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// terminate waits for the on-going processing to be completed then terminates the processor.
+// After calling terminate, the processor will no longer accept new batches.
+func (p *batchProcessor) terminate() {
+	p._mu.Lock()
+	defer p._mu.Unlock()
 
 	if p._terminated {
 		return
 	}
 
 	p._terminated = true
-	close(p.receiver)
+	close(p._receiver)
 }
 
-func (p *internalBatchProcessor) pause() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.paused = true
+// pause temporarily stops the batch processor from accepting new batches.
+// The processor will continue processing any batches already in progress.
+func (p *batchProcessor) pause() {
+	p._mu.Lock()
+	defer p._mu.Unlock()
+	p._paused = true
 }
 
-func (p *internalBatchProcessor) resume() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.paused = false
+// resume allows the batch processor to accept new batches after being paused.
+func (p *batchProcessor) resume() {
+	p._mu.Lock()
+	defer p._mu.Unlock()
+	p._paused = false
 }
 
-func (p *internalBatchProcessor) toString() string {
+// toString returns a string representation of this batch processor.
+func (p *batchProcessor) toString() string {
 	return p.id
 }
 
-func (p *internalBatchProcessor) terminated() <-chan any {
-	return p.terminatedCh
+func (p *batchProcessor) terminated() <-chan any {
+	return p._terminatedCh
 }
