@@ -50,6 +50,7 @@ type messageProcessor struct {
 	_batchers        *concurrentMap[string, *batcher]
 	_paused          bool
 	_terminated      bool
+	_panicked        bool
 	_mu              sync.RWMutex
 	_terminatedCh    chan any
 }
@@ -106,6 +107,7 @@ func (p *messageProcessor) run(ctx context.Context) {
 				fmt.Printf("message processor panicked: %v\n", r)
 				fmt.Println(string(debug.Stack()))
 
+				p._panicked = true
 				p.flushAndFailAll(r)
 				p.terminate()
 			} else {
@@ -334,6 +336,12 @@ func (p *messageProcessor) request(producers ...*producer) {
 
 		go func(r *request, producerId string) {
 			for messages := range r.response() {
+				if p._panicked {
+					messages[0].ack(messages, fmt.Errorf("message processor %s panicked", p.id))
+
+					break
+				}
+
 				p._messages.enqueue(messages...)
 			}
 
