@@ -197,60 +197,39 @@ func (p *producer) processRequests(ctx context.Context) {
 // sendMessages distributes messages to message processors in a round-robin fashion,
 // without regard to partition keys.
 func (p *producer) sendMessages(messages []*Message) {
-
-	type augmentedRequest struct {
-		request        *request
-		originalDemand int
-		fullfilled     bool
-	}
-
-	requests := lo.Map(p._requests.toSlice(), func(r *request, _ int) *augmentedRequest {
-		return &augmentedRequest{
-			request:        r,
-			originalDemand: r.demand,
-		}
-	})
-
-	index := 0
-
 	for {
 		if len(messages) == 0 {
 			break
 		}
 
-		if index == len(requests) {
-			index = 0
+		for _, request := range p._requests.toSlice() {
+			if len(messages) == 0 {
+				break
+			}
+
+			demand := min(request.demand, len(messages))
+			ok := request.reply(messages[:demand])
+
+			if !ok {
+				if request.isClosed() {
+					p._requests.remove(request)
+				}
+
+				continue
+			}
+
+			messages = messages[demand:]
+			request.demand -= demand
 		}
 
-		r := requests[index]
-
-		demand := min(r.request.demand, len(messages))
-		ok := r.request.reply(messages[:demand])
-
-		if !ok {
-			continue
+		for _, r := range p._requests.toSlice() {
+			if r.demand <= 0 {
+				r.close()
+				p._requests.remove(r)
+			}
 		}
 
-		messages = messages[demand:]
-		r.request.demand -= demand
-
-		// If there is no demand left, the request is considered fulfilled.
-		// Reset the demand to its original value so that the request can
-		// still accept more messages in case the messages are not fully consumed
-		// by other message processors.
-		if r.request.demand == 0 {
-			r.request.demand = r.originalDemand
-			r.fullfilled = true
-		}
-
-		index++
-	}
-
-	for _, r := range requests {
-		if r.fullfilled {
-			r.request.close()
-			p._requests.remove(r.request)
-		}
+		<-time.After(time.Millisecond * 100)
 	}
 
 }
@@ -286,6 +265,10 @@ func (p *producer) sendPartitionedMessages(messages []*Message) {
 
 			ok = request.reply(partition)
 			if !ok {
+				if request.isClosed() {
+					p._requests.remove(request)
+				}
+
 				continue
 			}
 
@@ -294,15 +277,16 @@ func (p *producer) sendPartitionedMessages(messages []*Message) {
 			delete(partitionedMessages, partitionKey)
 		}
 
+		for _, r := range p._requests.toSlice() {
+			if r.demand <= 0 {
+				r.close()
+				p._requests.remove(r)
+			}
+		}
+
 		<-time.After(time.Millisecond * 100)
 	}
 
-	for _, r := range p._requests.toSlice() {
-		if r.demand <= 0 {
-			r.close()
-			p._requests.remove(r)
-		}
-	}
 }
 
 // terminate closes pending requests and stops the producer.
