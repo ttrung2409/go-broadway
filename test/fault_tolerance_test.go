@@ -136,7 +136,7 @@ func hashString(s string) uint32 {
 	return h.Sum32()
 }
 
-func TestProducerRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
+func TestProducerFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	mu := sync.Mutex{}
 	count := 0
 
@@ -172,7 +172,7 @@ func TestProducerRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
 
-func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
+func TestMessageProcessorFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	mu := sync.Mutex{}
 	count := 0
 
@@ -208,7 +208,7 @@ func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
 
-func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFailure(
+func TestMessageProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailure(
 	t *testing.T,
 ) {
 	lastProcessedMessageByPartitionKey := make(map[string]*broadway.Message)
@@ -278,7 +278,7 @@ func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFail
 	)
 }
 
-func TestBatchProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
+func TestBatchProcessorFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T) {
 	mu := sync.Mutex{}
 	count := 0
 
@@ -295,14 +295,14 @@ func TestBatchProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T
 			Concurrency: 1,
 		},
 		MessageProcessor: broadway.MessageProcessorConfig{
-			Processor:   &faultToleranceTestMessageProcessor{id: uuid.NewString()},
+			Processor:   &faultToleranceTestMessageProcessor{},
 			Concurrency: 5,
 			MinDemand:   1,
 			MaxDemand:   10,
 		},
 		Batchers: []broadway.BatcherConfig{
 			{
-				Concurrency:  2,
+				Concurrency:  5,
 				Processor:    &faultToleranceTestBatchProcessor{shouldPanic: true},
 				BatchSize:    10,
 				BatchTimeout: time.Second,
@@ -318,10 +318,208 @@ func TestBatchProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T
 
 	cancel()
 
-	select {
-	case <-pipeline.Terminated():
-	case <-time.After(time.Second * 2):
-	}
+	<-pipeline.Terminated()
 
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
+}
+
+func TestBatchProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailure(
+	t *testing.T,
+) {
+	lastProcessedMessageByPartitionKey := make(map[string]*broadway.Message)
+	mu := &sync.Mutex{}
+	processedCount := 0
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		processedCount += len(messages)
+
+		for _, message := range messages {
+			payload := message.Payload.(*faultToleranceTestMessage)
+			partitionKey := payload.UserId
+
+			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
+				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				currentOrder := payload.Order
+
+				assert.Less(
+					t,
+					lastOrder,
+					currentOrder,
+					"messages with partition key %s were processed out of order: %d before %d",
+					partitionKey,
+					lastOrder,
+					currentOrder)
+
+			}
+
+			lastProcessedMessageByPartitionKey[partitionKey] = message
+		}
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    newFaultTolerantTestProducer(false),
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &faultToleranceTestMessageProcessor{},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &faultToleranceTestBatchProcessor{shouldPanic: true},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		PartitionBy: func(payload broadway.MessagePayload) string {
+			return payload.(*faultToleranceTestMessage).UserId
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.ProducerDrained()
+
+	cancel()
+
+	<-pipeline.Terminated()
+
+	assert.Equal(
+		t,
+		faultToleranceTestTotalMessages,
+		processedCount,
+		"not all messages were processed",
+	)
+}
+
+func TestPipelineFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T) {
+	mu := sync.Mutex{}
+	count := 0
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count += len(messages)
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    newFaultTolerantTestProducer(true),
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &faultToleranceTestMessageProcessor{shouldPanic: true},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &faultToleranceTestBatchProcessor{shouldPanic: true},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.ProducerDrained()
+
+	cancel()
+
+	<-pipeline.Terminated()
+
+	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
+}
+
+func TestPipelineFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailure(
+	t *testing.T,
+) {
+	lastProcessedMessageByPartitionKey := make(map[string]*broadway.Message)
+	mu := &sync.Mutex{}
+	processedCount := 0
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		processedCount += len(messages)
+
+		for _, message := range messages {
+			payload := message.Payload.(*faultToleranceTestMessage)
+			partitionKey := payload.UserId
+
+			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
+				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				currentOrder := payload.Order
+
+				assert.Less(
+					t,
+					lastOrder,
+					currentOrder,
+					"messages with partition key %s were processed out of order: %d before %d",
+					partitionKey,
+					lastOrder,
+					currentOrder)
+
+			}
+
+			lastProcessedMessageByPartitionKey[partitionKey] = message
+		}
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    newFaultTolerantTestProducer(true),
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &faultToleranceTestMessageProcessor{shouldPanic: true},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  5,
+				Processor:    &faultToleranceTestBatchProcessor{shouldPanic: true},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		PartitionBy: func(payload broadway.MessagePayload) string {
+			return payload.(*faultToleranceTestMessage).UserId
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.ProducerDrained()
+
+	cancel()
+
+	<-pipeline.Terminated()
+
+	assert.Equal(
+		t,
+		faultToleranceTestTotalMessages,
+		processedCount,
+		"not all messages were processed",
+	)
 }
