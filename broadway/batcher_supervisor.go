@@ -47,14 +47,8 @@ func (s *batcherSupervisor) run(
 		b.run(ctx)
 
 		go func(b *batcher) {
-			if panic, ok := <-b.terminated(); ok {
-				if panic != nil {
-					s.handleBatcherPanic(b, ctx)
-				} else {
-					s.checkIfAllBatchersTerminated()
-				}
-			}
-
+			<-b.terminated()
+			s.checkIfAllBatchersTerminated()
 		}(b)
 	}
 
@@ -68,24 +62,6 @@ func (s *batcherSupervisor) terminate() {
 	}
 
 	close(s.batchersChangeCh)
-}
-
-func (s *batcherSupervisor) handleBatcherPanic(b *batcher, ctx context.Context) {
-	newBatcher := newBatcher(b.config)
-	s.batchers.set(b.config.Name, newBatcher)
-	newBatcher.run(ctx)
-
-	go func(b *batcher) {
-		if panic, ok := <-b.terminated(); ok {
-			if panic != nil {
-				s.handleBatcherPanic(b, ctx)
-			} else {
-				s.checkIfAllBatchersTerminated()
-			}
-		}
-	}(newBatcher)
-
-	s.batchersChangeCh <- s.batchers.toMap()
 }
 
 func (s *batcherSupervisor) allBatchersTerminated() <-chan bool {
