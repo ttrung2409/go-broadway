@@ -161,7 +161,7 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 
@@ -226,7 +226,7 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 
@@ -329,7 +329,7 @@ func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 

@@ -30,10 +30,10 @@ type PipelineConfig struct {
 // It orchestrates the interaction between these components to ensure efficient
 // message processing with proper partitioning, batching, and acknowledgment.
 type Pipeline struct {
-	config            PipelineConfig
-	terminated        bool
-	producerDrainedCh chan bool
-	terminatedCh      chan bool
+	config         PipelineConfig
+	terminated     bool
+	producerIdleCh chan bool
+	terminatedCh   chan bool
 }
 
 // NewPipeline creates a new Broadway pipeline with the given configuration.
@@ -45,9 +45,9 @@ type Pipeline struct {
 //   - A new Pipeline instance
 func NewPipeline(config PipelineConfig) *Pipeline {
 	return &Pipeline{
-		config:            config,
-		producerDrainedCh: make(chan bool),
-		terminatedCh:      make(chan bool),
+		config:         config,
+		producerIdleCh: make(chan bool),
+		terminatedCh:   make(chan bool),
 	}
 }
 
@@ -79,7 +79,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 		go func() {
 			defer func() {
-				close(p.producerDrainedCh)
+				close(p.producerIdleCh)
 			}()
 
 			for {
@@ -92,8 +92,8 @@ func (p *Pipeline) Run(ctx context.Context) {
 					messageProcessorSupervisor.setProducers(producers)
 				case batchers := <-batcherSupervisor.batchersChanged():
 					messageProcessorSupervisor.setBatchers(batchers)
-				case <-producerSupervisor.allProducersDrained():
-					p.producerDrainedCh <- true
+				case <-producerSupervisor.allProducersIdle():
+					p.producerIdleCh <- true
 				}
 			}
 		}()
@@ -121,8 +121,8 @@ func (p *Pipeline) terminate() {
 	close(p.terminatedCh)
 }
 
-func (p *Pipeline) ProducerDrained() <-chan bool {
-	return p.producerDrainedCh
+func (p *Pipeline) WaitForProducerIdle() {
+	<-p.producerIdleCh
 }
 
 func (p *Pipeline) Terminated() <-chan bool {

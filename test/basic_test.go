@@ -152,7 +152,7 @@ func TestMessagesProperlyProcessedAndAcked(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 
@@ -206,7 +206,7 @@ func TestMessagesProperlyProcessedAndAcked_WithBatching(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 
@@ -262,7 +262,7 @@ func TestMessagesProperlyProcessedAndAcked_WithPartitioning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	<-pipeline.ProducerDrained()
+	pipeline.WaitForProducerIdle()
 
 	cancel()
 

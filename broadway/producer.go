@@ -44,10 +44,10 @@ type producer struct {
 	_requestChan              chan *request
 	_mu                       sync.Mutex
 	_terminated               bool
-	_drained                  bool
+	_idle                     bool
 	_messageProcessorResolver messageProcessorResolver
 	_messageAck               Acknowledger
-	_drainedCh                chan bool
+	_idleCh                   chan bool
 	_terminatedCh             chan any
 }
 
@@ -71,7 +71,7 @@ func newProducer(
 		_mu:                       sync.Mutex{},
 		_messageProcessorResolver: messageProcessorResolver,
 		_messageAck:               messageAck,
-		_drainedCh:                make(chan bool),
+		_idleCh:                   make(chan bool),
 		_terminatedCh:             make(chan any),
 	}
 }
@@ -181,11 +181,11 @@ func (p *producer) processRequests(ctx context.Context) {
 			p.sendMessages(messages)
 		}
 
-		p._drained = len(messages) == 0
+		p._idle = len(messages) == 0
 
-		if p._drained {
+		if p._idle {
 			select {
-			case p._drainedCh <- true: // sent successfully
+			case p._idleCh <- true: // sent successfully
 			default: // No receiver, ignore
 			}
 		}
@@ -304,16 +304,16 @@ func (p *producer) terminate() {
 	close(p._requestChan)
 }
 
-func (p *producer) drained() <-chan bool {
-	return p._drainedCh
+func (p *producer) idle() <-chan bool {
+	return p._idleCh
 }
 
 func (p *producer) terminated() <-chan any {
 	return p._terminatedCh
 }
 
-func (p *producer) isDrained() bool {
-	return p._drained
+func (p *producer) isIdle() bool {
+	return p._idle
 }
 
 func (p *producer) isTerminated() bool {

@@ -13,7 +13,7 @@ type producerSupervisor struct {
 	_messageProcessorResolver messageProcessorResolver
 	_messageAck               Acknowledger
 	_producersChangeCh        chan map[string]*producer
-	_allProducersDrainedCh    chan bool
+	_allProducersIdleCh       chan bool
 	_allProducersTerminatedCh chan bool
 }
 
@@ -28,7 +28,7 @@ func newProducerSupervisor(
 		_messageProcessorResolver: messageProcessorResolver,
 		_messageAck:               messageAck,
 		_producersChangeCh:        make(chan map[string]*producer),
-		_allProducersDrainedCh:    make(chan bool),
+		_allProducersIdleCh:       make(chan bool),
 		_allProducersTerminatedCh: make(chan bool),
 	}
 }
@@ -91,8 +91,8 @@ func (s *producerSupervisor) handleProducerPanic(p *producer, ctx context.Contex
 func (s *producerSupervisor) watchProducerStatus(p *producer, ctx context.Context) {
 	for {
 		select {
-		case <-p.drained():
-			s.checkIfAllProducersDrained()
+		case <-p.idle():
+			s.checkIfAllProducersIdle()
 		case panic, ok := <-p.terminated():
 			if ok {
 				if panic != nil {
@@ -107,18 +107,18 @@ func (s *producerSupervisor) watchProducerStatus(p *producer, ctx context.Contex
 	}
 }
 
-func (s *producerSupervisor) checkIfAllProducersDrained() {
-	allDrained := true
+func (s *producerSupervisor) checkIfAllProducersIdle() {
+	allIdle := true
 
 	for _, producer := range s._producers.values() {
-		if !producer.isDrained() {
-			allDrained = false
+		if !producer.isIdle() {
+			allIdle = false
 		}
 	}
 
-	if allDrained {
+	if allIdle {
 		select {
-		case s._allProducersDrainedCh <- true: // sent successfully
+		case s._allProducersIdleCh <- true: // sent successfully
 		default: // no receiver, ignore
 		}
 	}
@@ -141,8 +141,8 @@ func (s *producerSupervisor) checkIfAllProducersTerminated() {
 	}
 }
 
-func (s *producerSupervisor) allProducersDrained() <-chan bool {
-	return s._allProducersDrainedCh
+func (s *producerSupervisor) allProducersIdle() <-chan bool {
+	return s._allProducersIdleCh
 }
 
 func (s *producerSupervisor) producersChanged() <-chan map[string]*producer {
