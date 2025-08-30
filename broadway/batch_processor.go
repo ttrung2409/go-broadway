@@ -55,6 +55,20 @@ func newBatchProcessor(p BatchProcessor) *batchProcessor {
 func (p *batchProcessor) run(ctx context.Context) {
 
 	go func() {
+		defer func() {
+			r := recover()
+
+			if r != nil {
+				fmt.Printf("batch processor %s panicked: %v\n", p.id, r)
+				fmt.Println(string(debug.Stack()))
+
+				p.terminate()
+			}
+
+			p._terminatedCh <- r
+			close(p._terminatedCh)
+		}()
+
 		for messages := range p._receiver {
 			func(messages []*Message) {
 				defer func() {
@@ -63,15 +77,12 @@ func (p *batchProcessor) run(ctx context.Context) {
 					r := recover()
 
 					if r != nil {
-						fmt.Printf("batch processor %s panicked: %v\n", p.id, r)
-						fmt.Println(string(debug.Stack()))
-
 						if ack := messages[0].ack; ack != nil {
 							ack(messages,
 								fmt.Errorf("batch processor %s panicked: %v", p.id, r))
 						}
 
-						p.terminate()
+						panic(r)
 					}
 				}()
 
@@ -83,6 +94,7 @@ func (p *batchProcessor) run(ctx context.Context) {
 
 			}(messages)
 		}
+
 	}()
 
 }
