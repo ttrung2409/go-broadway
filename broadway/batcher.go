@@ -2,8 +2,6 @@ package broadway
 
 import (
 	"context"
-	"fmt"
-	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -37,7 +35,7 @@ type BatcherConfig struct {
 type batcher struct {
 	config BatcherConfig
 
-	_messages     *concurrentMap[string, *concurrentQueue[*Message]]
+	_batches      *concurrentMap[string, *concurrentQueue[*Message]]
 	_hr           *hashRing[*batchProcessor]
 	_receiver     chan []*Message
 	_terminated   bool
@@ -60,7 +58,7 @@ func newBatcher(config BatcherConfig) *batcher {
 
 	return &batcher{
 		config:        config,
-		_messages:     newConcurrentMap[string, *concurrentQueue[*Message]](),
+		_batches:      newConcurrentMap[string, *concurrentQueue[*Message]](),
 		_hr:           newHashRing[*batchProcessor](),
 		_receiver:     make(chan []*Message),
 		_mu:           sync.Mutex{},
@@ -90,24 +88,13 @@ func (b *batcher) run(ctx context.Context) {
 
 	go func() {
 		defer func() {
-			r := recover()
-
-			if r != nil {
-				fmt.Printf("batcher panicked: %v\n", r)
-				fmt.Println(string(debug.Stack()))
-
-				b.flushAndFailAll(r)
-				b.terminate()
-			} else {
-				b.flush()
-			}
+			b.flush()
 
 			processors := b._hr.getAllNodes()
 			for _, processor := range processors {
 				processor.terminate()
 			}
 
-			b._terminatedCh <- r
 			close(b._terminatedCh)
 			b._terminatedCh = nil
 		}()
@@ -115,11 +102,11 @@ func (b *batcher) run(ctx context.Context) {
 		for messages := range b._receiver {
 
 			for _, message := range messages {
-				if _, ok := b._messages.get(message.BatchKey); !ok {
-					b._messages.set(message.BatchKey, newConcurrentQueue[*Message]())
+				if _, ok := b._batches.get(message.BatchKey); !ok {
+					b._batches.set(message.BatchKey, newConcurrentQueue[*Message]())
 				}
 
-				batch, _ := b._messages.get(message.BatchKey)
+				batch, _ := b._batches.get(message.BatchKey)
 				batch.enqueue(message)
 			}
 		}
@@ -168,44 +155,25 @@ func (b *batcher) send(messages []*Message) bool {
 // is being terminated. It attempts to deliver all batched messages to their respective
 // batch processors before shutting down.
 func (b *batcher) flush() {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("batcher panicked: %v\n", r)
-		}
-	}()
 
 	for {
-		for batchKey, messages := range b._messages.toMap() {
+		for batchKey, messages := range b._batches.toMap() {
 			if batch, ok := messages.dequeueAll(); ok {
 				if b.processBatch(batchKey, batch) {
-					b._messages.delete(batchKey)
+					b._batches.delete(batchKey)
 				} else {
 					messages.prepend(batch...)
 				}
 			} else {
-				b._messages.delete(batchKey)
+				b._batches.delete(batchKey)
 			}
 		}
 
-		if b._messages.len() == 0 {
+		if b._batches.len() == 0 {
 			return
 		}
 
 		time.Sleep(time.Millisecond * 100)
-	}
-}
-
-func (b *batcher) flushAndFailAll(r any) {
-	for _, messages := range b._messages.values() {
-		msgs := messages.toSlice()
-
-		if len(msgs) == 0 {
-			continue
-		}
-
-		if ack := msgs[0].ack; ack != nil {
-			ack(msgs, fmt.Errorf("batcher %s panicked: %v", b.config.Name, r))
-		}
 	}
 }
 
@@ -224,7 +192,7 @@ func (b *batcher) processBatches() {
 
 		select {
 		case <-ticker.C:
-			for batchKey, messages := range b._messages.toMap() {
+			for batchKey, messages := range b._batches.toMap() {
 				if batch, ok := messages.dequeue(b.config.BatchSize); ok {
 					if !b.processBatch(batchKey, batch) {
 						messages.prepend(batch...)
@@ -234,7 +202,7 @@ func (b *batcher) processBatches() {
 
 		default:
 			// Check for any batches that have reached the batch size threshold
-			for batchKey, messages := range b._messages.toMap() {
+			for batchKey, messages := range b._batches.toMap() {
 				if messages.len() >= b.config.BatchSize {
 					if batch, ok := messages.dequeue(b.config.BatchSize); ok {
 						if !b.processBatch(batchKey, batch) {
@@ -311,6 +279,7 @@ func (b *batcher) handleProcessorPanic(processor *batchProcessor, ctx context.Co
 			b.handleProcessorPanic(p, ctx)
 		}
 	}(newProcessor)
+
 }
 
 func (b *batcher) terminated() <-chan any {
