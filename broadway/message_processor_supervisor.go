@@ -40,7 +40,7 @@ func (s *messageProcessorSupervisor) run(
 ) {
 	for i := 0; i < s.config.Concurrency; i++ {
 		mp := newMessageProcessor(s.config.Processor, s.config, producers, batchers)
-		mp.run(context.WithValue(ctx, MessageProcessorIdContextKey, mp.id))
+		mp.run(ctx)
 
 		go func(mp *messageProcessor) {
 			if panic, ok := <-mp.terminated(); ok {
@@ -81,7 +81,7 @@ func (s *messageProcessorSupervisor) handleProcessorPanic(
 	s.hr.removeNode(processor)
 
 	newProcessor := newMessageProcessor(processor.processor, s.config, producers, batchers)
-	newProcessor.run(context.WithValue(ctx, MessageProcessorIdContextKey, newProcessor.id))
+	newProcessor.run(ctx)
 
 	keySharingProcessor, _ := s.hr.getNextNode(newProcessor)
 

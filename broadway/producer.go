@@ -197,9 +197,10 @@ func (p *producer) processRequests(ctx context.Context) {
 // sendMessages distributes messages to message processors in a round-robin fashion,
 // without regard to partition keys.
 func (p *producer) sendMessages(messages []*Message) {
+
 	for {
 		if len(messages) == 0 {
-			break
+			return
 		}
 
 		for _, request := range p._requests.toSlice() {
@@ -246,7 +247,7 @@ func (p *producer) sendPartitionedMessages(messages []*Message) {
 	for {
 
 		if len(partitionedMessages) == 0 {
-			break
+			return
 		}
 
 		for partitionKey, partition := range partitionedMessages {

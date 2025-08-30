@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -78,26 +79,61 @@ func (p *faultToleranceTestProducer) HandleDemand(
 }
 
 type faultToleranceTestMessageProcessor struct {
+	id          string
 	shouldPanic bool
 	panicked    bool
 }
 
 func (p *faultToleranceTestMessageProcessor) Clone() broadway.MessageProcessor {
-	return &faultToleranceTestMessageProcessor{shouldPanic: p.shouldPanic && !p.panicked}
+	return &faultToleranceTestMessageProcessor{
+		id:          uuid.NewString(),
+		shouldPanic: p.shouldPanic && !p.panicked,
+	}
 }
 
 func (p *faultToleranceTestMessageProcessor) Handle(
 	message *broadway.Message,
 	ctx context.Context,
 ) (*broadway.Message, error) {
-	id := ctx.Value(broadway.MessageProcessorIdContextKey).(string)
 
-	if p.shouldPanic && hashString(id)%2 == 1 {
+	if p.shouldPanic && hashString(p.id)%2 == 1 {
 		p.panicked = true
 		panic("test message processor recovery")
 	}
 
 	return message, nil
+}
+
+type faultToleranceTestBatchProcessor struct {
+	id          string
+	shouldPanic bool
+	panicked    bool
+}
+
+func (p *faultToleranceTestBatchProcessor) Clone() broadway.BatchProcessor {
+	return &faultToleranceTestBatchProcessor{
+		id:          uuid.NewString(),
+		shouldPanic: p.shouldPanic,
+		panicked:    p.panicked,
+	}
+}
+
+func (p *faultToleranceTestBatchProcessor) Handle(
+	messages []*broadway.Message,
+	ctx context.Context,
+) ([]*broadway.Message, error) {
+	if p.shouldPanic && hashString(p.id)%2 == 1 {
+		p.panicked = true
+		panic("test batch processor recovery")
+	}
+
+	return messages, nil
+}
+
+func hashString(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
 }
 
 func TestProducerRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
@@ -172,12 +208,6 @@ func TestMessageProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing
 	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
 
-func hashString(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
-}
-
 func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFailure(
 	t *testing.T,
 ) {
@@ -246,5 +276,52 @@ func TestMessageProcessorRecovery_PartitionedMessagesProcessedInOrderDespiteFail
 		processedCount,
 		"not all messages were processed",
 	)
+}
 
+func TestBatchProcessorRecovery_MessagesProperlyAckedDespiteFailure(t *testing.T) {
+	mu := sync.Mutex{}
+	count := 0
+
+	acknowledger := func(messages []*broadway.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count += len(messages)
+	}
+
+	pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{
+			Producer:    newFaultTolerantTestProducer(false),
+			Concurrency: 1,
+		},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   &faultToleranceTestMessageProcessor{id: uuid.NewString()},
+			Concurrency: 5,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+		Batchers: []broadway.BatcherConfig{
+			{
+				Concurrency:  2,
+				Processor:    &faultToleranceTestBatchProcessor{shouldPanic: true},
+				BatchSize:    10,
+				BatchTimeout: time.Second,
+			},
+		},
+		Acknowledger: acknowledger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pipeline.Run(ctx)
+
+	<-pipeline.ProducerDrained()
+
+	cancel()
+
+	select {
+	case <-pipeline.Terminated():
+	case <-time.After(time.Second * 2):
+	}
+
+	assert.Equal(t, faultToleranceTestTotalMessages, count, "not all messages were processed")
 }
