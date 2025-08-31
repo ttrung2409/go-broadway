@@ -176,7 +176,7 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -248,7 +248,7 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 

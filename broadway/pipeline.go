@@ -121,8 +121,8 @@ func (p *Pipeline) terminate() {
 	close(p.terminatedCh)
 }
 
-func (p *Pipeline) WaitForProducerIdle() {
-	<-p.producerIdleCh
+func (p *Pipeline) ProducerIdle() <-chan bool {
+	return p.producerIdleCh
 }
 
 func (p *Pipeline) Terminated() <-chan bool {

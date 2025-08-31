@@ -103,7 +103,7 @@ func TestGracefulShutdown(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -151,7 +151,7 @@ func TestGracefulShutdown_WithBatching(t *testing.T) {
 
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 

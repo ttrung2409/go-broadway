@@ -163,7 +163,8 @@ func TestProducerFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
-	pipeline.WaitForProducerIdle()
+
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -199,7 +200,8 @@ func TestMessageProcessorFaultTolerance_MessagesProperlyAckedDespiteFailure(t *t
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
-	pipeline.WaitForProducerIdle()
+
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -264,7 +266,7 @@ func TestMessageProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespi
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -314,7 +316,7 @@ func TestBatchProcessorFaultTolerance_MessagesProperlyAckedDespiteFailure(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -387,7 +389,7 @@ func TestBatchProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespite
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -437,7 +439,7 @@ func TestPipelineFaultTolerance_MessagesProperlyAckedDespiteFailure(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
@@ -510,7 +512,7 @@ func TestPipelineFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailur
 	ctx, cancel := context.WithCancel(context.Background())
 	pipeline.Run(ctx)
 
-	pipeline.WaitForProducerIdle()
+	<-pipeline.ProducerIdle()
 
 	cancel()
 
