@@ -8,20 +8,28 @@ import (
 // messageProcessorSupervisor manages a pool of message processors, handling their
 // lifecycle and coordination with producers and batchers.
 type messageProcessorSupervisor struct {
-	config                    MessageProcessorConfig
-	hr                        *hashRing[*messageProcessor]
-	mu                        sync.Mutex
-	allProcessorsTerminatedCh chan bool
+	config MessageProcessorConfig
+
+	_hr                        *hashRing[*messageProcessor]
+	_mu                        sync.Mutex
+	_allProcessorsTerminatedCh chan bool
+	_producers                 *concurrentMap[string, *producer]
+	_batchers                  *concurrentMap[string, *batcher]
 }
 
 func newMessageProcessorSupervisor(
 	config MessageProcessorConfig,
+	producers map[string]*producer,
+	batchers map[string]*batcher,
 ) *messageProcessorSupervisor {
 	return &messageProcessorSupervisor{
-		config:                    config,
-		hr:                        newHashRing[*messageProcessor](),
-		mu:                        sync.Mutex{},
-		allProcessorsTerminatedCh: make(chan bool),
+		config: config,
+
+		_hr:                        newHashRing[*messageProcessor](),
+		_mu:                        sync.Mutex{},
+		_allProcessorsTerminatedCh: make(chan bool),
+		_producers:                 newConcurrentMap(producers),
+		_batchers:                  newConcurrentMap(batchers),
 	}
 }
 
@@ -33,19 +41,20 @@ func newMessageProcessorSupervisor(
 //   - ctx: The provided context when starting the pipeline
 //   - producers: A map of producer IDs to producer instances that the processors will receive messages from.
 //   - batchers: A map of batcher names to batcher instances that the processors will send processed messages to.
-func (s *messageProcessorSupervisor) run(
-	ctx context.Context,
-	producers map[string]*producer,
-	batchers map[string]*batcher,
-) {
+func (s *messageProcessorSupervisor) run(ctx context.Context) {
 	for i := 0; i < s.config.Concurrency; i++ {
-		mp := newMessageProcessor(s.config.Processor, s.config, producers, batchers)
+		mp := newMessageProcessor(
+			s.config.Processor,
+			s.config,
+			s._producers.toMap(),
+			s._batchers.toMap(),
+		)
 		mp.run(ctx)
 
 		go func(mp *messageProcessor) {
 			if panic, ok := <-mp.terminated(); ok {
 				if panic != nil {
-					s.handleProcessorPanic(mp, producers, batchers, ctx)
+					s.handleProcessorPanic(mp, ctx)
 				} else {
 					s.checkIfAllProcessorsTerminated()
 				}
@@ -53,17 +62,17 @@ func (s *messageProcessorSupervisor) run(
 
 		}(mp)
 
-		s.hr.addNode(mp)
+		s._hr.addNode(mp)
 	}
 }
 
 // terminate stops all message processors managed by this supervisor.
 // This should be called when shutting down the pipeline to ensure proper cleanup.
 func (s *messageProcessorSupervisor) terminate() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
-	processors := s.hr.getAllNodes()
+	processors := s._hr.getAllNodes()
 	for _, p := range processors {
 		p.terminate()
 	}
@@ -71,25 +80,28 @@ func (s *messageProcessorSupervisor) terminate() {
 
 func (s *messageProcessorSupervisor) handleProcessorPanic(
 	processor *messageProcessor,
-	producers map[string]*producer,
-	batchers map[string]*batcher,
 	ctx context.Context,
 ) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
-	s.hr.removeNode(processor)
+	s._hr.removeNode(processor)
 
-	newProcessor := newMessageProcessor(processor.processor, s.config, producers, batchers)
+	newProcessor := newMessageProcessor(
+		processor.processor,
+		s.config,
+		s._producers.toMap(),
+		s._batchers.toMap(),
+	)
 	newProcessor.run(ctx)
 
-	keySharingProcessor, _ := s.hr.getNextNode(newProcessor)
+	keySharingProcessor, _ := s._hr.getNextNode(newProcessor)
 
 	if keySharingProcessor != nil {
 		keySharingProcessor.pause()
 	}
 
-	s.hr.addNode(newProcessor)
+	s._hr.addNode(newProcessor)
 
 	if keySharingProcessor != nil {
 		keySharingProcessor.resume()
@@ -98,7 +110,7 @@ func (s *messageProcessorSupervisor) handleProcessorPanic(
 	go func(p *messageProcessor) {
 		if panic, ok := <-p.terminated(); ok {
 			if panic != nil {
-				s.handleProcessorPanic(p, producers, batchers, ctx)
+				s.handleProcessorPanic(p, ctx)
 			} else {
 				s.checkIfAllProcessorsTerminated()
 			}
@@ -114,10 +126,12 @@ func (s *messageProcessorSupervisor) handleProcessorPanic(
 //   - producers: A map of producer IDs to producer instances that will replace
 //     the current set of producers for all managed message processors.
 func (s *messageProcessorSupervisor) setProducers(producers map[string]*producer) {
-	processors := s.hr.getAllNodes()
+	s._producers.reset(producers)
+
+	processors := s._hr.getAllNodes()
 
 	for _, p := range processors {
-		p.setProducers(producers)
+		p.setProducers(s._producers.toMap())
 	}
 }
 
@@ -129,10 +143,12 @@ func (s *messageProcessorSupervisor) setProducers(producers map[string]*producer
 //   - batchers: A map of batcher names to batcher instances that will replace
 //     the current set of batchers for all managed message processors.
 func (s *messageProcessorSupervisor) setBatchers(batchers map[string]*batcher) {
-	processors := s.hr.getAllNodes()
+	s._batchers.reset(batchers)
+
+	processors := s._hr.getAllNodes()
 
 	for _, p := range processors {
-		p.setBatchers(batchers)
+		p.setBatchers(s._batchers.toMap())
 	}
 }
 
@@ -145,7 +161,7 @@ func (s *messageProcessorSupervisor) setBatchers(batchers map[string]*batcher) {
 //   - The ID of the message processor responsible for the partition key, or an empty string if not found.
 //   - A boolean indicating whether a processor was found for the given partition key.
 func (s *messageProcessorSupervisor) resolve(partitionKey string) (string, bool) {
-	if processor, ok := s.hr.getNode(partitionKey); ok {
+	if processor, ok := s._hr.getNode(partitionKey); ok {
 		return processor.id, true
 	}
 
@@ -153,18 +169,18 @@ func (s *messageProcessorSupervisor) resolve(partitionKey string) (string, bool)
 }
 
 func (s *messageProcessorSupervisor) allProcessorsTerminated() <-chan bool {
-	return s.allProcessorsTerminatedCh
+	return s._allProcessorsTerminatedCh
 }
 
 func (s *messageProcessorSupervisor) checkIfAllProcessorsTerminated() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
-	if s.allProcessorsTerminatedCh == nil {
+	if s._allProcessorsTerminatedCh == nil {
 		return
 	}
 
-	processors := s.hr.getAllNodes()
+	processors := s._hr.getAllNodes()
 
 	allTerminated := true
 
@@ -175,8 +191,8 @@ func (s *messageProcessorSupervisor) checkIfAllProcessorsTerminated() {
 	}
 
 	if allTerminated {
-		s.allProcessorsTerminatedCh <- true
-		close(s.allProcessorsTerminatedCh)
-		s.allProcessorsTerminatedCh = nil
+		s._allProcessorsTerminatedCh <- true
+		close(s._allProcessorsTerminatedCh)
+		s._allProcessorsTerminatedCh = nil
 	}
 }

@@ -8,20 +8,22 @@ import (
 // batcherSupervisor manages a collection of batchers, handling their lifecycle
 // and ensuring fault tolerance by restarting batchers that panic during execution.
 type batcherSupervisor struct {
-	config                  []BatcherConfig
-	batchers                *concurrentMap[string, *batcher]
-	mu                      sync.Mutex
-	batchersChangeCh        chan map[string]*batcher
-	allBatchersTerminatedCh chan bool
+	config []BatcherConfig
+
+	_batchers                *concurrentMap[string, *batcher]
+	_mu                      sync.Mutex
+	_batchersChangeCh        chan map[string]*batcher
+	_allBatchersTerminatedCh chan bool
 }
 
 func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 	return &batcherSupervisor{
-		config:                  config,
-		batchers:                newConcurrentMap[string, *batcher](),
-		mu:                      sync.Mutex{},
-		batchersChangeCh:        make(chan map[string]*batcher),
-		allBatchersTerminatedCh: make(chan bool),
+		config: config,
+
+		_batchers:                newConcurrentMap[string, *batcher](),
+		_mu:                      sync.Mutex{},
+		_batchersChangeCh:        make(chan map[string]*batcher),
+		_allBatchersTerminatedCh: make(chan bool),
 	}
 }
 
@@ -43,7 +45,7 @@ func (s *batcherSupervisor) run(
 
 	for _, batcherConfig := range s.config {
 		b := newBatcher(batcherConfig)
-		s.batchers.set(b.config.Name, b)
+		s._batchers.set(b.config.Name, b)
 		b.run(ctx)
 
 		go func(b *batcher) {
@@ -52,45 +54,45 @@ func (s *batcherSupervisor) run(
 		}(b)
 	}
 
-	return s.batchers.toMap()
+	return s._batchers.toMap()
 }
 
 // terminate stops all batchers managed by this supervisor.
 func (s *batcherSupervisor) terminate() {
-	for _, b := range s.batchers.toMap() {
+	for _, b := range s._batchers.toMap() {
 		b.terminate()
 	}
 
-	close(s.batchersChangeCh)
+	close(s._batchersChangeCh)
 }
 
 func (s *batcherSupervisor) allBatchersTerminated() <-chan bool {
-	return s.allBatchersTerminatedCh
+	return s._allBatchersTerminatedCh
 }
 
 func (s *batcherSupervisor) checkIfAllBatchersTerminated() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
-	if s.allBatchersTerminatedCh == nil {
+	if s._allBatchersTerminatedCh == nil {
 		return
 	}
 
 	allTerminated := true
 
-	for _, b := range s.batchers.toMap() {
+	for _, b := range s._batchers.toMap() {
 		if !b.isTerminated() {
 			allTerminated = false
 		}
 	}
 
 	if allTerminated {
-		s.allBatchersTerminatedCh <- true
-		close(s.allBatchersTerminatedCh)
-		s.allBatchersTerminatedCh = nil
+		s._allBatchersTerminatedCh <- true
+		close(s._allBatchersTerminatedCh)
+		s._allBatchersTerminatedCh = nil
 	}
 }
 
 func (s *batcherSupervisor) batchersChanged() <-chan map[string]*batcher {
-	return s.batchersChangeCh
+	return s._batchersChangeCh
 }

@@ -41,9 +41,7 @@ func newProducerSupervisor(
 //
 // Returns:
 //   - A map of producer IDs to producer instances that are currently active.
-func (s *producerSupervisor) run(
-	ctx context.Context,
-) map[string]*producer {
+func (s *producerSupervisor) run(ctx context.Context) map[string]*producer {
 
 	for i := 0; i < s.config.Concurrency; i++ {
 		p := newProducer(s.config.Producer, s.config, s._messageProcessorResolver, s._messageAck)

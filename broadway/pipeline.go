@@ -58,7 +58,7 @@ func NewPipeline(config PipelineConfig) *Pipeline {
 //   - ctx: the cancellable context, possibly with value.
 func (p *Pipeline) Run(ctx context.Context) {
 	go func() {
-		messageProcessorSupervisor := newMessageProcessorSupervisor(p.config.MessageProcessor)
+		var messageProcessorSupervisor *messageProcessorSupervisor
 
 		producerConfig := p.config.Producer
 		producerConfig.partitionKeyResolver = p.config.PartitionBy
@@ -75,7 +75,13 @@ func (p *Pipeline) Run(ctx context.Context) {
 		batcherSupervisor := newBatcherSupervisor(p.config.Batchers)
 		batchers := batcherSupervisor.run(ctx)
 
-		messageProcessorSupervisor.run(ctx, producers, batchers)
+		messageProcessorSupervisor = newMessageProcessorSupervisor(
+			p.config.MessageProcessor,
+			producers,
+			batchers,
+		)
+
+		messageProcessorSupervisor.run(ctx)
 
 		go func() {
 			defer func() {
