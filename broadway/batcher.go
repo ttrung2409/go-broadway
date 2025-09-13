@@ -173,7 +173,7 @@ func (b *batcher) flush() {
 			return
 		}
 
-		time.Sleep(time.Millisecond * 100)
+		<-time.After(time.Millisecond * 100)
 	}
 }
 

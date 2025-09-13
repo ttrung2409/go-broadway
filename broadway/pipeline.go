@@ -96,8 +96,6 @@ func (p *Pipeline) Run(ctx context.Context) {
 				select {
 				case producers := <-producerSupervisor.producersChanged():
 					messageProcessorSupervisor.setProducers(producers)
-				case batchers := <-batcherSupervisor.batchersChanged():
-					messageProcessorSupervisor.setBatchers(batchers)
 				case <-producerSupervisor.allProducersIdle():
 					p.producerIdleCh <- true
 				}

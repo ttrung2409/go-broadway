@@ -359,15 +359,6 @@ func (p *messageProcessor) setProducers(producers map[string]*producer) {
 	p._producers.reset(producers)
 }
 
-// setBatchers assigns a map of batchers to this message processor.
-// Processed messages will be sent to these batchers for further processing.
-//
-// Parameters:
-//   - batchers: A map of batcher names to batcher instances.
-func (p *messageProcessor) setBatchers(batchers map[string]*batcher) {
-	p._batchers.reset(batchers)
-}
-
 // toString returns a string representation of this message processor.
 func (p *messageProcessor) toString() string {
 	return p.id

@@ -135,23 +135,6 @@ func (s *messageProcessorSupervisor) setProducers(producers map[string]*producer
 	}
 }
 
-// setBatchers updates the batchers for all message processors managed by this supervisor.
-// This is called when the set of available batchers changes, such as when a batcher
-// fails and is replaced.
-//
-// Parameters:
-//   - batchers: A map of batcher names to batcher instances that will replace
-//     the current set of batchers for all managed message processors.
-func (s *messageProcessorSupervisor) setBatchers(batchers map[string]*batcher) {
-	s._batchers.reset(batchers)
-
-	processors := s._hr.getAllNodes()
-
-	for _, p := range processors {
-		p.setBatchers(s._batchers.toMap())
-	}
-}
-
 // resolve attempts to find the message processor responsible for a given partition key.
 //
 // Parameters:
