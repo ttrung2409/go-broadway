@@ -118,6 +118,9 @@ func (hr *hashRing[N]) getNode(key string) (N, bool) {
 //   - The next node in the hash ring
 //   - true if a next node was found, false otherwise
 func (hr *hashRing[N]) getNextNode(node N) (N, bool) {
+	hr.mu.RLock()
+	defer hr.mu.RUnlock()
+
 	if len(hr.nodes) == 0 {
 		var zero N
 		return zero, false

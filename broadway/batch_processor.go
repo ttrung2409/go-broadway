@@ -72,17 +72,20 @@ func (p *batchProcessor) run(ctx context.Context) {
 		for messages := range p._receiver {
 			func(messages []*Message) {
 				defer func() {
-					p._mu.Unlock()
-
 					r := recover()
 
 					if r != nil {
+						p._paused = true
+						p._mu.Unlock()
+
 						if ack := messages[0].ack; ack != nil {
 							ack(messages,
 								fmt.Errorf("batch processor %s panicked: %v", p.id, r))
 						}
 
 						panic(r)
+					} else {
+						p._mu.Unlock()
 					}
 				}()
 
