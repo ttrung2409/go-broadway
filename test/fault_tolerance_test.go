@@ -113,8 +113,7 @@ type faultToleranceTestBatchProcessor struct {
 func (p *faultToleranceTestBatchProcessor) Clone() broadway.BatchProcessor {
 	return &faultToleranceTestBatchProcessor{
 		id:          uuid.NewString(),
-		shouldPanic: p.shouldPanic,
-		panicked:    p.panicked,
+		shouldPanic: p.shouldPanic && !p.panicked,
 	}
 }
 
