@@ -10,12 +10,12 @@ import (
 //
 // Type parameter T can be any type.
 type concurrentQueue[T any] struct {
-	queue []T
-	mu    sync.RWMutex
+	_queue []T
+	_mu    sync.RWMutex
 }
 
 func newConcurrentQueue[T any]() *concurrentQueue[T] {
-	return &concurrentQueue[T]{queue: make([]T, 0), mu: sync.RWMutex{}}
+	return &concurrentQueue[T]{_queue: make([]T, 0), _mu: sync.RWMutex{}}
 }
 
 // enqueue adds one or more items to the end of the queue.
@@ -23,9 +23,9 @@ func newConcurrentQueue[T any]() *concurrentQueue[T] {
 // Parameters:
 //   - items: The items to be added to the end of the queue
 func (q *concurrentQueue[T]) enqueue(items ...T) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.queue = append(q.queue, items...)
+	q._mu.Lock()
+	defer q._mu.Unlock()
+	q._queue = append(q._queue, items...)
 }
 
 // prepend adds one or more items to the beginning of the queue.
@@ -33,9 +33,9 @@ func (q *concurrentQueue[T]) enqueue(items ...T) {
 // Parameters:
 //   - items: The items to be added to the beginning of the queue
 func (q *concurrentQueue[T]) prepend(items ...T) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.queue = append(items, q.queue...)
+	q._mu.Lock()
+	defer q._mu.Unlock()
+	q._queue = append(items, q._queue...)
 }
 
 // dequeue removes and returns up to 'total' items from the queue.
@@ -48,17 +48,17 @@ func (q *concurrentQueue[T]) prepend(items ...T) {
 //   - A slice containing the dequeued items (may be fewer than requested)
 //   - true if at least one item was dequeued, false otherwise
 func (q *concurrentQueue[T]) dequeue(total int) ([]T, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q._mu.Lock()
+	defer q._mu.Unlock()
 
-	if len(q.queue) < total {
-		items := q.queue
-		q.queue = make([]T, 0)
+	if len(q._queue) < total {
+		items := q._queue
+		q._queue = make([]T, 0)
 		return items, len(items) > 0
 	}
 
-	items := q.queue[:total]
-	q.queue = q.queue[total:]
+	items := q._queue[:total]
+	q._queue = q._queue[total:]
 	return items, len(items) > 0
 }
 
@@ -68,11 +68,11 @@ func (q *concurrentQueue[T]) dequeue(total int) ([]T, bool) {
 //   - A slice containing all items that were in the queue
 //   - true if at least one item was in the queue, false otherwise
 func (q *concurrentQueue[T]) dequeueAll() ([]T, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q._mu.Lock()
+	defer q._mu.Unlock()
 
-	items := q.queue
-	q.queue = make([]T, 0)
+	items := q._queue
+	q._queue = make([]T, 0)
 	return items, len(items) > 0
 }
 
@@ -81,17 +81,17 @@ func (q *concurrentQueue[T]) dequeueAll() ([]T, bool) {
 // Returns:
 //   - The number of items in the queue
 func (q *concurrentQueue[T]) len() int {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	q._mu.RLock()
+	defer q._mu.RUnlock()
 
-	return len(q.queue)
+	return len(q._queue)
 }
 
 func (q *concurrentQueue[T]) toSlice() []T {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	q._mu.RLock()
+	defer q._mu.RUnlock()
 
-	snapshot := make([]T, len(q.queue))
-	copy(snapshot, q.queue)
+	snapshot := make([]T, len(q._queue))
+	copy(snapshot, q._queue)
 	return snapshot
 }

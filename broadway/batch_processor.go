@@ -24,6 +24,12 @@ type BatchProcessor interface {
 	//   - An error if processing failed, or nil if successful.
 	Handle(messages []*Message, ctx context.Context) ([]*Message, error)
 
+	// Clone creates a new instance of the batch processor.
+	// This method is used to create multiple instances of the processor
+	// for concurrent batch processing.
+	//
+	// Returns:
+	//   - A new instance of the batch processor
 	Clone() BatchProcessor
 }
 

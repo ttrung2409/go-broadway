@@ -36,6 +36,12 @@ type MessageProcessor interface {
 	//   - An error if processing failed, or nil if successful.
 	Handle(message *Message, ctx context.Context) (*Message, error)
 
+	// Clone creates a new instance of the message processor.
+	// This method is used to create multiple instances of the processor
+	// for concurrent processing.
+	//
+	// Returns:
+	//   - A new instance of the message processor
 	Clone() MessageProcessor
 }
 

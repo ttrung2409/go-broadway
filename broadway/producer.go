@@ -30,6 +30,12 @@ type Producer interface {
 	//   - A slice of message payloads
 	HandleDemand(demand int, ctx context.Context) []MessagePayload
 
+	// Clone creates a new instance of the producer.
+	// This method is used to create multiple instances of the producer
+	// for concurrent processing.
+	//
+	// Returns:
+	//   - A new instance of the producer
 	Clone() Producer
 }
 

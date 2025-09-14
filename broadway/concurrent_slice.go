@@ -12,13 +12,13 @@ import (
 //
 // Type parameter T can be any type.
 type concurrentSlice[T comparable] struct {
-	items []T
-	mu    sync.RWMutex
+	_slice []T
+	_mu    sync.RWMutex
 }
 
 // newConcurrentSlice creates a new concurrent slice.
 func newConcurrentSlice[T comparable]() *concurrentSlice[T] {
-	return &concurrentSlice[T]{items: make([]T, 0), mu: sync.RWMutex{}}
+	return &concurrentSlice[T]{_slice: make([]T, 0), _mu: sync.RWMutex{}}
 }
 
 // add appends one or more items to the end of the slice.
@@ -26,9 +26,9 @@ func newConcurrentSlice[T comparable]() *concurrentSlice[T] {
 // Parameters:
 //   - items: The items to be added to the end of the slice
 func (s *concurrentSlice[T]) add(items ...T) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items = append(s.items, items...)
+	s._mu.Lock()
+	defer s._mu.Unlock()
+	s._slice = append(s._slice, items...)
 }
 
 // filter removes items from the slice that don't satisfy the predicate function.
@@ -40,18 +40,18 @@ func (s *concurrentSlice[T]) add(items ...T) {
 // Returns:
 //   - A new concurrent slice after filtering
 func (s *concurrentSlice[T]) filter(predicate func(item T) bool) *concurrentSlice[T] {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
 	filtered := []T{}
 
-	for _, item := range s.items {
+	for _, item := range s._slice {
 		if predicate(item) {
 			filtered = append(filtered, item)
 		}
 	}
 
-	s.items = filtered
+	s._slice = filtered
 
 	return s
 }
@@ -61,10 +61,10 @@ func (s *concurrentSlice[T]) filter(predicate func(item T) bool) *concurrentSlic
 // Returns:
 //   - The number of items in the slice
 func (s *concurrentSlice[T]) len() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s._mu.RLock()
+	defer s._mu.RUnlock()
 
-	return len(s.items)
+	return len(s._slice)
 }
 
 // remove removes the first occurrence of the specified item from the slice.
@@ -75,12 +75,12 @@ func (s *concurrentSlice[T]) len() int {
 // Returns:
 //   - true if the item was found and removed, false otherwise
 func (s *concurrentSlice[T]) remove(item T) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s._mu.Lock()
+	defer s._mu.Unlock()
 
-	for i, v := range s.items {
+	for i, v := range s._slice {
 		if v == item {
-			s.items = append(s.items[:i], s.items[i+1:]...)
+			s._slice = append(s._slice[:i], s._slice[i+1:]...)
 			return true
 		}
 	}
@@ -89,11 +89,11 @@ func (s *concurrentSlice[T]) remove(item T) bool {
 }
 
 func (s *concurrentSlice[T]) toSlice() []T {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s._mu.RLock()
+	defer s._mu.RUnlock()
 
-	items := make([]T, len(s.items))
-	copy(items, s.items)
+	items := make([]T, len(s._slice))
+	copy(items, s._slice)
 
 	return items
 }

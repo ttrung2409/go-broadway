@@ -21,15 +21,15 @@ type node interface {
 //
 // Type parameter N must satisfy the node interface.
 type hashRing[N node] struct {
-	nodes      []N          // Sorted list of nodes in the ring
-	hashToNode map[uint32]N // Mapping from hash values to nodes
-	mu         sync.RWMutex // Lock for thread safety
+	_nodes      []N          // Sorted list of nodes in the ring
+	_hashToNode map[uint32]N // Mapping from hash values to nodes
+	_mu         sync.RWMutex // Lock for thread safety
 }
 
 func newHashRing[N node]() *hashRing[N] {
 	return &hashRing[N]{
-		nodes:      []N{},
-		hashToNode: make(map[uint32]N),
+		_nodes:      []N{},
+		_hashToNode: make(map[uint32]N),
 	}
 }
 
@@ -39,18 +39,18 @@ func newHashRing[N node]() *hashRing[N] {
 // Parameters:
 //   - node: The node to be added to the hash ring
 func (hr *hashRing[N]) addNode(node N) {
-	hr.mu.Lock()
-	defer hr.mu.Unlock()
+	hr._mu.Lock()
+	defer hr._mu.Unlock()
 
 	hash := hashString(node.toString())
-	if _, exists := hr.hashToNode[hash]; exists {
+	if _, exists := hr._hashToNode[hash]; exists {
 		return
 	}
 
-	hr.nodes = append(hr.nodes, node)
-	hr.hashToNode[hash] = node
-	sort.Slice(hr.nodes, func(i, j int) bool {
-		return hashString(hr.nodes[i].toString()) < hashString(hr.nodes[j].toString())
+	hr._nodes = append(hr._nodes, node)
+	hr._hashToNode[hash] = node
+	sort.Slice(hr._nodes, func(i, j int) bool {
+		return hashString(hr._nodes[i].toString()) < hashString(hr._nodes[j].toString())
 	})
 }
 
@@ -60,19 +60,19 @@ func (hr *hashRing[N]) addNode(node N) {
 // Parameters:
 //   - node: The node to remove from the hash ring
 func (hr *hashRing[N]) removeNode(node N) {
-	hr.mu.Lock()
-	defer hr.mu.Unlock()
+	hr._mu.Lock()
+	defer hr._mu.Unlock()
 
 	hash := hashString(node.toString())
-	if _, exists := hr.hashToNode[hash]; !exists {
+	if _, exists := hr._hashToNode[hash]; !exists {
 		return
 	}
 
-	delete(hr.hashToNode, hash)
+	delete(hr._hashToNode, hash)
 
-	for i, n := range hr.nodes {
+	for i, n := range hr._nodes {
 		if n.toString() == node.toString() {
-			hr.nodes = append(hr.nodes[:i], hr.nodes[i+1:]...)
+			hr._nodes = append(hr._nodes[:i], hr._nodes[i+1:]...)
 			break
 		}
 	}
@@ -90,23 +90,23 @@ func (hr *hashRing[N]) removeNode(node N) {
 //   - The node responsible for the key
 //   - true if a node was found, false otherwise
 func (hr *hashRing[N]) getNode(key string) (N, bool) {
-	hr.mu.RLock()
-	defer hr.mu.RUnlock()
+	hr._mu.RLock()
+	defer hr._mu.RUnlock()
 
-	if len(hr.nodes) == 0 {
+	if len(hr._nodes) == 0 {
 		var zero N
 		return zero, false
 	}
 
 	hash := hashString(key)
-	for _, node := range hr.nodes {
+	for _, node := range hr._nodes {
 		if hashString(node.toString()) >= hash {
 			return node, true
 		}
 	}
 
 	// Wrap around to the first node
-	return hr.nodes[0], true
+	return hr._nodes[0], true
 }
 
 // getNextNode returns the next node in the hash ring after the given node.
@@ -118,25 +118,25 @@ func (hr *hashRing[N]) getNode(key string) (N, bool) {
 //   - The next node in the hash ring
 //   - true if a next node was found, false otherwise
 func (hr *hashRing[N]) getNextNode(node N) (N, bool) {
-	hr.mu.RLock()
-	defer hr.mu.RUnlock()
+	hr._mu.RLock()
+	defer hr._mu.RUnlock()
 
-	if len(hr.nodes) == 0 {
+	if len(hr._nodes) == 0 {
 		var zero N
 		return zero, false
 	}
 
 	hash := hashString(node.toString())
 
-	i := sort.Search(len(hr.nodes), func(i int) bool {
-		return hashString(hr.nodes[i].toString()) > hash
+	i := sort.Search(len(hr._nodes), func(i int) bool {
+		return hashString(hr._nodes[i].toString()) > hash
 	})
 
-	if i == len(hr.nodes) {
-		return hr.nodes[0], true
+	if i == len(hr._nodes) {
+		return hr._nodes[0], true
 	}
 
-	return hr.nodes[i], true
+	return hr._nodes[i], true
 }
 
 // getAllNodes returns all nodes currently in the hash ring.
@@ -144,10 +144,10 @@ func (hr *hashRing[N]) getNextNode(node N) (N, bool) {
 // Returns:
 //   - A slice containing all nodes in the hash ring
 func (hr *hashRing[N]) getAllNodes() []N {
-	hr.mu.RLock()
-	defer hr.mu.RUnlock()
+	hr._mu.RLock()
+	defer hr._mu.RUnlock()
 
-	return hr.nodes
+	return hr._nodes
 }
 
 func hashString(s string) uint32 {
