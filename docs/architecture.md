@@ -69,7 +69,7 @@ The system supports multiple batchers, each with its own unique name, allowing m
 message.Batcher = "my_batcher"
 ```
 
-##### Batch Key
+#### Batch Key
 
 Each message carries a batch key that determines how messages are grouped within a batcher. Messages sharing the same batch key are collected into the same batch and always processed by the same batch processor, guaranteeing ordered processing for related messages.
 
