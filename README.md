@@ -2,9 +2,6 @@
 
 A concurrent and multi-stage data ingestion and processing framework for Go applications, inspired by the Broadway library from Elixir. go-broadway simplifies building concurrent, resilient data processing pipelines with built-in support for batching, partitioning, and fault tolerance.
 
-![Go Version](https://img.shields.io/github/go-mod/go-version/ttrung2409/go-broadway)
-![License](https://img.shields.io/github/license/ttrung2409/go-broadway)
-
 ## Features
 
 - **Back-pressure** - The pipeline only requests the amount of messages necessary from producers, never flooding the system
