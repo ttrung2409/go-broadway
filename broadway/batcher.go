@@ -100,6 +100,9 @@ func (b *batcher) run(ctx context.Context) {
 			for _, processor := range processors {
 				processor.terminate()
 			}
+			for _, processor := range processors {
+				<-processor.terminated()
+			}
 
 			b._fullyTerminated.Store(true)
 			close(b._terminatedCh)
