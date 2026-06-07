@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 )
@@ -38,8 +39,8 @@ type batchProcessor struct {
 	_processor    BatchProcessor
 	_receiver     chan []*Message
 	_mu           sync.Mutex
-	_terminated   bool
-	_paused       bool
+	_terminated   atomic.Bool
+	_paused       atomic.Bool
 	_terminatedCh chan any
 }
 
@@ -78,7 +79,7 @@ func (p *batchProcessor) run(ctx context.Context) {
 					r := recover()
 
 					if r != nil {
-						p._paused = true
+						p._paused.Store(true)
 						p._mu.Unlock()
 
 						if ack := messages[0].ack; ack != nil {
@@ -118,7 +119,7 @@ func (p *batchProcessor) send(batch []*Message) bool {
 		return false
 	}
 
-	if p._terminated || p._paused {
+	if p._terminated.Load() || p._paused.Load() {
 		p._mu.Unlock()
 		return false
 	}
@@ -134,27 +135,22 @@ func (p *batchProcessor) terminate() {
 	p._mu.Lock()
 	defer p._mu.Unlock()
 
-	if p._terminated {
+	if p._terminated.Swap(true) {
 		return
 	}
 
-	p._terminated = true
 	close(p._receiver)
 }
 
 // pause temporarily stops the batch processor from accepting new batches.
 // The processor will continue processing any batches already in progress.
 func (p *batchProcessor) pause() {
-	p._mu.Lock()
-	defer p._mu.Unlock()
-	p._paused = true
+	p._paused.Store(true)
 }
 
 // resume allows the batch processor to accept new batches after being paused.
 func (p *batchProcessor) resume() {
-	p._mu.Lock()
-	defer p._mu.Unlock()
-	p._paused = false
+	p._paused.Store(false)
 }
 
 // toString returns a string representation of this batch processor.
