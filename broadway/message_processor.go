@@ -3,7 +3,6 @@ package broadway
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -110,8 +109,6 @@ func (p *messageProcessor) run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("message processor panicked: %v\n", r)
-				fmt.Println(string(debug.Stack()))
-
 				p._panicked = true
 				p.flushAndFailAll(r)
 				p.terminate()

@@ -3,7 +3,6 @@ package broadway
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
 
 	"github.com/google/uuid"
@@ -66,8 +65,6 @@ func (p *batchProcessor) run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("batch processor %s panicked: %v\n", p.id, r)
-				fmt.Println(string(debug.Stack()))
-
 				p.terminate()
 			}
 
