@@ -48,3 +48,7 @@ func (r *request) reply(messages []*Message) bool {
 func (r *request) response() <-chan []*Message {
 	return r._responseChan
 }
+
+func (r *request) closed() <-chan struct{} {
+	return r._closedChan
+}

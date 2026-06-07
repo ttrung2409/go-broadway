@@ -325,17 +325,23 @@ func (p *messageProcessor) request(producers ...*producer) {
 		p._pendingRequests.set(producer.id, r)
 
 		go func(r *request, producerId string) {
-			for messages := range r.response() {
-				if p._panicked {
-					messages[0].ack(messages, fmt.Errorf("message processor %s panicked", p.id))
+			defer func() {
+				r.close()
+				p._pendingRequests.delete(producerId)
+			}()
 
-					break
+			for {
+				select {
+				case messages := <-r.response():
+					if p._panicked {
+						messages[0].ack(messages, fmt.Errorf("message processor %s panicked", p.id))
+						return
+					}
+					p._messages.enqueue(messages...)
+				case <-r.closed():
+					return
 				}
-
-				p._messages.enqueue(messages...)
 			}
-
-			p._pendingRequests.delete(producerId)
 		}(r, producer.id)
 	}
 }
