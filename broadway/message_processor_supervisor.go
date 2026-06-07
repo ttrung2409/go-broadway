@@ -13,6 +13,7 @@ type messageProcessorSupervisor struct {
 	_hr                        *hashRing[*messageProcessor]
 	_mu                        sync.Mutex
 	_allProcessorsTerminatedCh chan bool
+	_terminatedOnce            sync.Once
 	_producers                 *concurrentMap[string, *producer]
 	_batchers                  *concurrentMap[string, *batcher]
 }
@@ -159,23 +160,17 @@ func (s *messageProcessorSupervisor) checkIfAllProcessorsTerminated() {
 	s._mu.Lock()
 	defer s._mu.Unlock()
 
-	if s._allProcessorsTerminatedCh == nil {
-		return
-	}
-
-	processors := s._hr.getAllNodes()
-
 	allTerminated := true
-
-	for _, processor := range processors {
+	for _, processor := range s._hr.getAllNodes() {
 		if !processor.isTerminated() {
 			allTerminated = false
+			break
 		}
 	}
 
 	if allTerminated {
-		s._allProcessorsTerminatedCh <- true
-		close(s._allProcessorsTerminatedCh)
-		s._allProcessorsTerminatedCh = nil
+		s._terminatedOnce.Do(func() {
+			s._allProcessorsTerminatedCh <- true
+		})
 	}
 }

@@ -13,6 +13,7 @@ type batcherSupervisor struct {
 	_batchers                *concurrentMap[string, *batcher]
 	_mu                      sync.Mutex
 	_allBatchersTerminatedCh chan bool
+	_terminatedOnce          sync.Once
 }
 
 func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
@@ -71,21 +72,17 @@ func (s *batcherSupervisor) checkIfAllBatchersTerminated() {
 	s._mu.Lock()
 	defer s._mu.Unlock()
 
-	if s._allBatchersTerminatedCh == nil {
-		return
-	}
-
 	allTerminated := true
-
 	for _, b := range s._batchers.toMap() {
 		if !b.isTerminated() {
 			allTerminated = false
+			break
 		}
 	}
 
 	if allTerminated {
-		s._allBatchersTerminatedCh <- true
-		close(s._allBatchersTerminatedCh)
-		s._allBatchersTerminatedCh = nil
+		s._terminatedOnce.Do(func() {
+			s._allBatchersTerminatedCh <- true
+		})
 	}
 }
