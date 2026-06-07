@@ -78,7 +78,7 @@ func newProducer(
 		_mu:                       sync.Mutex{},
 		_messageProcessorResolver: messageProcessorResolver,
 		_messageAck:               messageAck,
-		_idleCh:                   make(chan bool),
+		_idleCh:                   make(chan bool, 1),
 		_terminatedCh:             make(chan any, 1),
 	}
 }

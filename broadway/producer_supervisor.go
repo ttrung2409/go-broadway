@@ -2,6 +2,7 @@ package broadway
 
 import (
 	"context"
+	"sync"
 )
 
 // producerSupervisor manages a pool of producer instances, handling their lifecycle
@@ -15,6 +16,7 @@ type producerSupervisor struct {
 	_producersChangeCh        chan map[string]*producer
 	_allProducersIdleCh       chan bool
 	_allProducersTerminatedCh chan bool
+	_terminatedOnce           sync.Once
 }
 
 func newProducerSupervisor(
@@ -28,8 +30,8 @@ func newProducerSupervisor(
 		_messageProcessorResolver: messageProcessorResolver,
 		_messageAck:               messageAck,
 		_producersChangeCh:        make(chan map[string]*producer),
-		_allProducersIdleCh:       make(chan bool),
-		_allProducersTerminatedCh: make(chan bool),
+		_allProducersIdleCh:       make(chan bool, 1),
+		_allProducersTerminatedCh: make(chan bool, 1),
 	}
 }
 
@@ -128,14 +130,14 @@ func (s *producerSupervisor) checkIfAllProducersTerminated() {
 	for _, producer := range s._producers.values() {
 		if !producer.isTerminated() {
 			allTerminated = false
+			break
 		}
 	}
 
 	if allTerminated {
-		select {
-		case s._allProducersTerminatedCh <- true: // sent successfully
-		default: // no receiver, ignore
-		}
+		s._terminatedOnce.Do(func() {
+			s._allProducersTerminatedCh <- true
+		})
 	}
 }
 

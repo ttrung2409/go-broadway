@@ -22,7 +22,7 @@ func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 
 		_batchers:                newConcurrentMap[string, *batcher](),
 		_mu:                      sync.Mutex{},
-		_allBatchersTerminatedCh: make(chan bool),
+		_allBatchersTerminatedCh: make(chan bool, 1),
 	}
 }
 

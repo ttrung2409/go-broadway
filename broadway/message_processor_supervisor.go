@@ -28,7 +28,7 @@ func newMessageProcessorSupervisor(
 
 		_hr:                        newHashRing[*messageProcessor](),
 		_mu:                        sync.Mutex{},
-		_allProcessorsTerminatedCh: make(chan bool),
+		_allProcessorsTerminatedCh: make(chan bool, 1),
 		_producers:                 newConcurrentMap(producers),
 		_batchers:                  newConcurrentMap(batchers),
 	}
