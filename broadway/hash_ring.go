@@ -147,7 +147,9 @@ func (hr *hashRing[N]) getAllNodes() []N {
 	hr._mu.RLock()
 	defer hr._mu.RUnlock()
 
-	return hr._nodes
+	nodes := make([]N, len(hr._nodes))
+	copy(nodes, hr._nodes)
+	return nodes
 }
 
 func hashString(s string) uint32 {
