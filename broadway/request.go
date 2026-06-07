@@ -7,7 +7,7 @@ type request struct {
 	messageProcessorId string
 
 	_responseChan chan []*Message
-	_closedChan   chan struct{}
+	_closedChan   chan bool
 	_closed       atomic.Bool
 }
 
@@ -16,7 +16,7 @@ func newRequest(messageProcessorId string, demand int) *request {
 		demand:             demand,
 		messageProcessorId: messageProcessorId,
 		_responseChan:      make(chan []*Message),
-		_closedChan:        make(chan struct{}),
+		_closedChan:        make(chan bool),
 	}
 }
 
@@ -49,6 +49,6 @@ func (r *request) response() <-chan []*Message {
 	return r._responseChan
 }
 
-func (r *request) closed() <-chan struct{} {
+func (r *request) closed() <-chan bool {
 	return r._closedChan
 }
