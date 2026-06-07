@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,10 +54,10 @@ type messageProcessor struct {
 	_pendingRequests *concurrentMap[string, *request]
 	_producers       *concurrentMap[string, *producer]
 	_batchers        *concurrentMap[string, *batcher]
-	_paused          bool
-	_terminated      bool
+	_paused          atomic.Bool
+	_terminated      atomic.Bool
+	_fullyTerminated atomic.Bool
 	_panicked        bool
-	_mu              sync.RWMutex
 	_terminatedCh    chan any
 }
 
@@ -81,10 +81,9 @@ func newMessageProcessor(
 		config:           config,
 		_messages:        newConcurrentQueue[*Message](),
 		_pendingRequests: newConcurrentMap[string, *request](),
-		_mu:              sync.RWMutex{},
 		_producers:       newConcurrentMap(producers),
 		_batchers:        newConcurrentMap(batchers),
-		_terminatedCh:    make(chan any),
+		_terminatedCh:    make(chan any, 1),
 	}
 }
 
@@ -124,19 +123,19 @@ func (p *messageProcessor) run(ctx context.Context) {
 				request.close()
 			}
 
+			p._fullyTerminated.Store(true)
 			p._terminatedCh <- r
 			close(p._terminatedCh)
-			p._terminatedCh = nil
 		}()
 
 		for {
 			ongoingMessages = []*Message{}
 
-			if p._terminated {
+			if p._terminated.Load() {
 				return
 			}
 
-			if p._paused {
+			if p._paused.Load() {
 				time.Sleep(time.Millisecond * 100)
 				continue
 			}
@@ -163,37 +162,22 @@ func (p *messageProcessor) run(ctx context.Context) {
 // terminate flushes all remaining messages in the queue and stop the message processor.
 // After calling terminate, the processor will no longer process new messages.
 func (p *messageProcessor) terminate() {
-	p._mu.Lock()
-	defer p._mu.Unlock()
-
-	if p._terminated {
-		return
-	}
-
-	p._terminated = true
+	p._terminated.Store(true)
 }
 
 // pause temporarily stops the message processor from accepting new messages.
 func (p *messageProcessor) pause() {
-	p._mu.Lock()
-	defer p._mu.Unlock()
-
-	if p._paused {
+	if p._paused.Swap(true) {
 		return
 	}
-
 	for _, request := range p._pendingRequests.values() {
 		request.close()
 	}
-
-	p._paused = true
 }
 
 // resume allows the message processor to accept new messages after being paused.
 func (p *messageProcessor) resume() {
-	p._mu.Lock()
-	defer p._mu.Unlock()
-	p._paused = false
+	p._paused.Store(false)
 }
 
 // flush processes any remaining messages in the queue before shutdown.
@@ -375,5 +359,5 @@ func (p *messageProcessor) terminated() <-chan any {
 }
 
 func (p *messageProcessor) isTerminated() bool {
-	return p._terminatedCh == nil
+	return p._fullyTerminated.Load()
 }

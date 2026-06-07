@@ -50,7 +50,7 @@ func newBatchProcessor(p BatchProcessor) *batchProcessor {
 		_processor:    p.Clone(),
 		_receiver:     make(chan []*Message),
 		_mu:           sync.Mutex{},
-		_terminatedCh: make(chan any),
+		_terminatedCh: make(chan any, 1),
 	}
 }
 

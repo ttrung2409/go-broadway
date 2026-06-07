@@ -1,16 +1,14 @@
 package broadway
 
-import (
-	"sync"
-)
+import "sync/atomic"
 
 type request struct {
 	demand             int
 	messageProcessorId string
 
 	_responseChan chan []*Message
-	_closed       bool
-	_mu           sync.Mutex
+	_closedChan   chan struct{}
+	_closed       atomic.Bool
 }
 
 func newRequest(messageProcessorId string, demand int) *request {
@@ -18,39 +16,33 @@ func newRequest(messageProcessorId string, demand int) *request {
 		demand:             demand,
 		messageProcessorId: messageProcessorId,
 		_responseChan:      make(chan []*Message),
-		_mu:                sync.Mutex{},
+		_closedChan:        make(chan struct{}),
 	}
 }
 
 func (r *request) isClosed() bool {
-	r._mu.Lock()
-	defer r._mu.Unlock()
-	return r._closed
+	return r._closed.Load()
 }
 
 func (r *request) close() {
-	r._mu.Lock()
-	defer r._mu.Unlock()
-
-	if r._closed {
+	if r._closed.Swap(true) {
 		return
 	}
-
-	r._closed = true
-	close(r._responseChan)
+	close(r._closedChan)
 }
 
+// reply sends messages to the consumer. Returns false if the request is closed.
 func (r *request) reply(messages []*Message) bool {
-	r._mu.Lock()
-	defer r._mu.Unlock()
-
-	if r._closed {
+	if r._closed.Load() {
 		return false
 	}
 
-	r._responseChan <- messages
-
-	return true
+	select {
+	case r._responseChan <- messages:
+		return true
+	case <-r._closedChan:
+		return false
+	}
 }
 
 func (r *request) response() <-chan []*Message {

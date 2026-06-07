@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,8 +50,8 @@ type producer struct {
 	_requests                 *concurrentSlice[*request]
 	_requestChan              chan *request
 	_mu                       sync.Mutex
-	_terminated               bool
-	_idle                     bool
+	_terminated               atomic.Bool
+	_idle                     atomic.Bool
 	_messageProcessorResolver messageProcessorResolver
 	_messageAck               Acknowledger
 	_idleCh                   chan bool
@@ -78,7 +79,7 @@ func newProducer(
 		_messageProcessorResolver: messageProcessorResolver,
 		_messageAck:               messageAck,
 		_idleCh:                   make(chan bool),
-		_terminatedCh:             make(chan any),
+		_terminatedCh:             make(chan any, 1),
 	}
 }
 
@@ -127,7 +128,7 @@ func (p *producer) send(request *request) bool {
 	p._mu.Lock()
 	defer p._mu.Unlock()
 
-	if p._terminated {
+	if p._terminated.Load() {
 		return false
 	}
 
@@ -142,7 +143,7 @@ func (p *producer) processRequests(ctx context.Context) {
 
 	for {
 
-		if p._terminated {
+		if p._terminated.Load() {
 			return
 		}
 
@@ -150,7 +151,7 @@ func (p *producer) processRequests(ctx context.Context) {
 			continue
 		}
 
-		p._requests = p._requests.filter(func(r *request) bool {
+		p._requests.filter(func(r *request) bool {
 			return !r.isClosed()
 		})
 
@@ -164,7 +165,7 @@ func (p *producer) processRequests(ctx context.Context) {
 		}
 
 		payloads := make([]MessagePayload, 0)
-		if !p._terminated {
+		if !p._terminated.Load() {
 			payloads = p.producer.HandleDemand(totalDemand, ctx)
 		}
 
@@ -187,9 +188,9 @@ func (p *producer) processRequests(ctx context.Context) {
 			p.sendMessages(messages)
 		}
 
-		p._idle = len(messages) == 0
+		p._idle.Store(len(messages) == 0)
 
-		if p._idle {
+		if p._idle.Load() {
 			select {
 			case p._idleCh <- true: // sent successfully
 			default: // No receiver, ignore
@@ -302,11 +303,10 @@ func (p *producer) terminate() {
 	p._mu.Lock()
 	defer p._mu.Unlock()
 
-	if p._terminated {
+	if p._terminated.Swap(true) {
 		return
 	}
 
-	p._terminated = true
 	close(p._requestChan)
 }
 
@@ -319,9 +319,9 @@ func (p *producer) terminated() <-chan any {
 }
 
 func (p *producer) isIdle() bool {
-	return p._idle
+	return p._idle.Load()
 }
 
 func (p *producer) isTerminated() bool {
-	return p._terminated
+	return p._terminated.Load()
 }

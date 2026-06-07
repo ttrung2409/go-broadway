@@ -3,6 +3,7 @@ package broadway
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,12 +36,13 @@ type BatcherConfig struct {
 type batcher struct {
 	config BatcherConfig
 
-	_batches      *concurrentMap[string, *concurrentQueue[*Message]]
-	_hr           *hashRing[*batchProcessor]
-	_receiver     chan []*Message
-	_terminated   bool
-	_mu           sync.Mutex
-	_terminatedCh chan any
+	_batches         *concurrentMap[string, *concurrentQueue[*Message]]
+	_hr              *hashRing[*batchProcessor]
+	_receiver        chan []*Message
+	_terminated      atomic.Bool
+	_fullyTerminated atomic.Bool
+	_mu              sync.Mutex
+	_terminatedCh    chan any
 }
 
 func newBatcher(config BatcherConfig) *batcher {
@@ -95,8 +97,8 @@ func (b *batcher) run(ctx context.Context) {
 				processor.terminate()
 			}
 
+			b._fullyTerminated.Store(true)
 			close(b._terminatedCh)
-			b._terminatedCh = nil
 		}()
 
 		for messages := range b._receiver {
@@ -122,11 +124,10 @@ func (b *batcher) terminate() {
 	b._mu.Lock()
 	defer b._mu.Unlock()
 
-	if b._terminated {
+	if b._terminated.Swap(true) {
 		return
 	}
 
-	b._terminated = true
 	close(b._receiver)
 }
 
@@ -142,7 +143,7 @@ func (b *batcher) send(messages []*Message) bool {
 	b._mu.Lock()
 	defer b._mu.Unlock()
 
-	if b._terminated {
+	if b._terminated.Load() {
 		return false
 	}
 
@@ -186,7 +187,7 @@ func (b *batcher) processBatches() {
 	defer ticker.Stop()
 
 	for {
-		if b._terminated {
+		if b._terminated.Load() {
 			return
 		}
 
@@ -287,5 +288,5 @@ func (b *batcher) terminated() <-chan any {
 }
 
 func (b *batcher) isTerminated() bool {
-	return b._terminatedCh == nil
+	return b._fullyTerminated.Load()
 }

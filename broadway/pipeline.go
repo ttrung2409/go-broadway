@@ -2,6 +2,7 @@ package broadway
 
 import (
 	"context"
+	"sync/atomic"
 )
 
 // PartitionKeyResolver is a function that extracts a partition key from a message.
@@ -31,7 +32,7 @@ type PipelineConfig struct {
 // message processing with proper partitioning, batching, and acknowledgment.
 type Pipeline struct {
 	config         PipelineConfig
-	terminated     bool
+	terminated     atomic.Bool
 	producerIdleCh chan bool
 	terminatedCh   chan bool
 }
@@ -46,8 +47,8 @@ type Pipeline struct {
 func NewPipeline(config PipelineConfig) *Pipeline {
 	return &Pipeline{
 		config:         config,
-		producerIdleCh: make(chan bool),
-		terminatedCh:   make(chan bool),
+		producerIdleCh: make(chan bool, 1),
+		terminatedCh:   make(chan bool, 1),
 	}
 }
 
@@ -89,7 +90,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			}()
 
 			for {
-				if p.terminated {
+				if p.terminated.Load() {
 					return
 				}
 
@@ -97,7 +98,10 @@ func (p *Pipeline) Run(ctx context.Context) {
 				case producers := <-producerSupervisor.producersChanged():
 					messageProcessorSupervisor.setProducers(producers)
 				case <-producerSupervisor.allProducersIdle():
-					p.producerIdleCh <- true
+					select {
+					case p.producerIdleCh <- true:
+					default:
+					}
 				}
 			}
 		}()
@@ -120,7 +124,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 }
 
 func (p *Pipeline) terminate() {
-	p.terminated = true
+	p.terminated.Store(true)
 	p.terminatedCh <- true
 	close(p.terminatedCh)
 }
