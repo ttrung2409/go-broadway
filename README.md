@@ -279,7 +279,7 @@ The library includes tests demonstrating various scenarios:
 To run the tests:
 
 ```bash
-go test ./test/...
+go test ./test/... -v -race
 ```
 
 ## License
