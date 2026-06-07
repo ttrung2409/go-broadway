@@ -56,7 +56,7 @@ type messageProcessor struct {
 	_paused          atomic.Bool
 	_terminated      atomic.Bool
 	_fullyTerminated atomic.Bool
-	_panicked        bool
+	_panicked        atomic.Bool
 	_terminatedCh    chan any
 }
 
@@ -109,7 +109,7 @@ func (p *messageProcessor) run(ctx context.Context) {
 
 			if r != nil {
 				fmt.Printf("message processor panicked: %v\n", r)
-				p._panicked = true
+				p._panicked.Store(true)
 				p.flushAndFailAll(r)
 				p.terminate()
 			} else {
@@ -330,7 +330,7 @@ func (p *messageProcessor) request(producers ...*producer) {
 			for {
 				select {
 				case messages := <-r.response():
-					if p._panicked {
+					if p._panicked.Load() {
 						messages[0].ack(messages, fmt.Errorf("message processor %s panicked", p.id))
 						return
 					}
