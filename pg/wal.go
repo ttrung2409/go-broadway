@@ -1,0 +1,277 @@
+package pg
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
+)
+
+const outputPlugin = "pgoutput"
+
+// walStreamer consumes a Postgres logical replication slot, decodes pgoutput
+// messages into CDCEvents, and forwards committed transaction batches to the merger.
+type walStreamer struct {
+	conn        *pgconn.PgConn
+	slotName    string
+	publication string
+	merger      *merger
+	relations   map[uint32]*pglogrepl.RelationMessageV2
+
+	confirmedLSN   pglogrepl.LSN
+	confirmedLSNCh chan pglogrepl.LSN // receives advances from the acknowledger
+}
+
+func newWALStreamer(
+	conn *pgconn.PgConn,
+	slotName, publication string,
+	startLSN pglogrepl.LSN,
+	m *merger,
+) *walStreamer {
+	return &walStreamer{
+		conn:           conn,
+		slotName:       slotName,
+		publication:    publication,
+		merger:         m,
+		relations:      make(map[uint32]*pglogrepl.RelationMessageV2),
+		confirmedLSN:   startLSN,
+		confirmedLSNCh: make(chan pglogrepl.LSN, 64),
+	}
+}
+
+// run starts logical replication from startLSN and streams events until ctx is cancelled.
+// The replication connection is closed on return so the slot is released immediately.
+func (w *walStreamer) run(ctx context.Context) error {
+	defer w.conn.Close(context.Background())
+	pluginArgs := []string{
+		"proto_version '2'",
+		fmt.Sprintf("publication_names '%s'", w.publication),
+		"messages 'true'",
+	}
+
+	if err := pglogrepl.StartReplication(
+		ctx,
+		w.conn,
+		w.slotName,
+		w.confirmedLSN,
+		pglogrepl.StartReplicationOptions{PluginArgs: pluginArgs},
+	); err != nil {
+		return fmt.Errorf("start replication: %w", err)
+	}
+
+	standbyDeadline := time.Now().Add(10 * time.Second)
+
+	var (
+		currentXID uint32
+		batch      []cdcEvent
+	)
+
+	for {
+		select {
+		case lsn := <-w.confirmedLSNCh:
+			if lsn > w.confirmedLSN {
+				w.confirmedLSN = lsn
+			}
+		default:
+		}
+
+		if time.Now().After(standbyDeadline) {
+			if err := pglogrepl.SendStandbyStatusUpdate(ctx, w.conn,
+				pglogrepl.StandbyStatusUpdate{WALWritePosition: w.confirmedLSN},
+			); err != nil {
+				return fmt.Errorf("standby status update: %w", err)
+			}
+			standbyDeadline = time.Now().Add(10 * time.Second)
+		}
+
+		receiveCtx, cancel := context.WithDeadline(ctx, standbyDeadline)
+		rawMsg, err := w.conn.ReceiveMessage(receiveCtx)
+		cancel()
+
+		if err != nil {
+			if pgconn.Timeout(err) {
+				continue
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("receive message: %w", err)
+		}
+
+		if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
+			return fmt.Errorf("postgres replication error: %s", errMsg.Message)
+		}
+
+		msg, ok := rawMsg.(*pgproto3.CopyData)
+		if !ok {
+			continue
+		}
+
+		if len(msg.Data) == 0 {
+			continue
+		}
+
+		switch msg.Data[0] {
+		case pglogrepl.PrimaryKeepaliveMessageByteID:
+			pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
+			if err != nil {
+				return fmt.Errorf("parse keepalive: %w", err)
+			}
+			if pkm.ReplyRequested {
+				standbyDeadline = time.Time{}
+			}
+
+		case pglogrepl.XLogDataByteID:
+			xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
+			if err != nil {
+				return fmt.Errorf("parse xlog data: %w", err)
+			}
+
+			logicalMsg, err := pglogrepl.ParseV2(xld.WALData, false)
+			if err != nil {
+				return fmt.Errorf("parse logical msg: %w", err)
+			}
+
+			switch m := logicalMsg.(type) {
+			case *pglogrepl.RelationMessageV2:
+				w.relations[m.RelationID] = m
+
+			case *pglogrepl.BeginMessage:
+				currentXID = m.Xid
+				batch = batch[:0]
+
+			case *pglogrepl.InsertMessageV2:
+				rel, ok := w.relations[m.RelationID]
+				if !ok {
+					break
+				}
+				event := w.decodeInsert(rel, m, currentXID)
+				batch = append(batch, event)
+
+			case *pglogrepl.UpdateMessageV2:
+				rel, ok := w.relations[m.RelationID]
+				if !ok {
+					break
+				}
+				event := w.decodeUpdate(rel, m, currentXID)
+				batch = append(batch, event)
+
+			case *pglogrepl.DeleteMessageV2:
+				rel, ok := w.relations[m.RelationID]
+				if !ok {
+					break
+				}
+				event := w.decodeDelete(rel, m, currentXID)
+				batch = append(batch, event)
+
+			case *pglogrepl.CommitMessage:
+				commitLSN := uint64(m.CommitLSN)
+				w.merger.onWALBatch(walBatch{events: batch, commitLSN: commitLSN})
+				batch = nil
+			}
+		}
+	}
+}
+
+// advanceConfirmedLSN notifies the streamer that the given LSN has been
+// acknowledged downstream. The streamer sends a StandbyStatusUpdate on the
+// next keepalive cycle.
+func (w *walStreamer) advanceConfirmedLSN(lsn uint64) {
+	select {
+	case w.confirmedLSNCh <- pglogrepl.LSN(lsn):
+	default:
+	}
+}
+
+func (w *walStreamer) decodeInsert(
+	rel *pglogrepl.RelationMessageV2,
+	m *pglogrepl.InsertMessageV2,
+	xid uint32,
+) cdcEvent {
+	after := decodeTuple(rel, m.Tuple)
+	return cdcEvent{
+		schema: rel.Namespace,
+		table: rel.RelationName,
+		operation: OperationInsert,
+		pk: extractPKFromRelation(rel, after),
+		after: after,
+		commitXID: xid,
+	}
+}
+
+func (w *walStreamer) decodeUpdate(
+	rel *pglogrepl.RelationMessageV2,
+	m *pglogrepl.UpdateMessageV2,
+	xid uint32,
+) cdcEvent {
+	after := decodeTuple(rel, m.NewTuple)
+	var before row
+	if m.OldTuple != nil {
+		before = decodeTuple(rel, m.OldTuple)
+	}
+	return cdcEvent{
+		schema: rel.Namespace,
+		table: rel.RelationName,
+		operation: OperationUpdate,
+		pk: extractPKFromRelation(rel, after),
+		before: before,
+		after: after,
+		commitXID: xid,
+	}
+}
+
+func (w *walStreamer) decodeDelete(
+	rel *pglogrepl.RelationMessageV2,
+	m *pglogrepl.DeleteMessageV2,
+	xid uint32,
+) cdcEvent {
+	before := decodeTuple(rel, m.OldTuple)
+	return cdcEvent{
+		schema: rel.Namespace,
+		table: rel.RelationName,
+		operation: OperationDelete,
+		pk: extractPKFromRelation(rel, before),
+		before: before,
+		commitXID: xid,
+	}
+}
+
+// decodeTuple converts a pglogrepl TupleData into a map of column name → value.
+func decodeTuple(rel *pglogrepl.RelationMessageV2, tuple *pglogrepl.TupleData) row {
+	if tuple == nil {
+		return nil
+	}
+	row := make(row, len(rel.Columns))
+	for i, col := range rel.Columns {
+		if i >= len(tuple.Columns) {
+			break
+		}
+		tc := tuple.Columns[i]
+		switch tc.DataType {
+		case 'n':
+			row[col.Name] = nil
+		case 't':
+			row[col.Name] = string(tc.Data)
+		case 'u':
+			// unchanged TOAST — omit
+		}
+	}
+	return row
+}
+
+// extractPKFromRelation returns the PK for the row using the replica identity columns.
+func extractPKFromRelation(rel *pglogrepl.RelationMessageV2, row row) pk {
+	for _, col := range rel.Columns {
+		if col.Flags == 1 { // part of replica identity
+			return pkFromValue(row[col.Name])
+		}
+	}
+	// fallback: use first column
+	if len(rel.Columns) > 0 {
+		return pkFromValue(row[rel.Columns[0].Name])
+	}
+	return pk{}
+}

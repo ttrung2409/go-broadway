@@ -45,6 +45,10 @@ type Pipeline struct {
 // Returns:
 //   - A new Pipeline instance
 func NewPipeline(config PipelineConfig) *Pipeline {
+	if connector, ok := config.Producer.Producer.(Connector); ok && config.Acknowledger == nil {
+		config.Acknowledger = connector.Acknowledger()
+	}
+
 	return &Pipeline{
 		config:         config,
 		producerIdleCh: make(chan bool, 1),
