@@ -37,6 +37,8 @@ func newFaultTolerantTestProducer(shouldPanic bool) *faultToleranceTestProducer 
 	}
 }
 
+func (p *faultToleranceTestProducer) Init(_ context.Context) {}
+
 func (p *faultToleranceTestProducer) Clone() broadway.Producer {
 	return &faultToleranceTestProducer{shouldPanic: p.shouldPanic && !p.panicked}
 }

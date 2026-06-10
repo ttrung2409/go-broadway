@@ -47,6 +47,7 @@ func (s *producerSupervisor) run(ctx context.Context) map[string]*producer {
 
 	for i := 0; i < s.config.Concurrency; i++ {
 		p := newProducer(s.config.Producer, s.config, s._messageProcessorResolver, s._messageAck)
+		p.init(ctx)
 		s._producers.set(p.id, p)
 		p.run(ctx)
 

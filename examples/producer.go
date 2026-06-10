@@ -16,6 +16,8 @@ type ActivityProducer struct {
 	actions []string
 }
 
+func (p *ActivityProducer) Init(_ context.Context) {}
+
 func (p *ActivityProducer) Clone() broadway.Producer {
 	// Create 10 sample users
 	userIDs := make([]string, 10)

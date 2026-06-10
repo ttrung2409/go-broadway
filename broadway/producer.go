@@ -21,6 +21,14 @@ type ProducerConfig struct {
 // Producer is the interface that must be implemented when define a pipeline.
 // Producers generate message payloads in response to demand from the pipeline.
 type Producer interface {
+	// Init is called once when the pipeline starts, before the first HandleDemand.
+	// It is not called on clones created during producer restarts.
+	// Use it for one-time setup that requires a context, such as opening connections.
+	//
+	// Parameters:
+	//   - ctx: The context provided when starting the pipeline.
+	Init(ctx context.Context)
+
 	// HandleDemand generates message payloads in response to demand from the pipeline.
 	//
 	// Parameters:
@@ -81,6 +89,10 @@ func newProducer(
 		_idleCh:                   make(chan bool, 1),
 		_terminatedCh:             make(chan any, 1),
 	}
+}
+
+func (p *producer) init(ctx context.Context) {
+	p.producer.Init(ctx)
 }
 
 // Run starts the producer with the provided context in a goroutine.

@@ -24,6 +24,8 @@ type basicTestProducer struct {
 	failedCount   int
 }
 
+func (p *basicTestProducer) Init(_ context.Context) {}
+
 func (p *basicTestProducer) Clone() broadway.Producer {
 	return &basicTestProducer{totalFailed: p.totalFailed}
 }

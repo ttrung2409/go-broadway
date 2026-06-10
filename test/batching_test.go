@@ -25,6 +25,8 @@ type batchingTestProducer struct {
 	count int
 }
 
+func (p *batchingTestProducer) Init(_ context.Context) {}
+
 func (p *batchingTestProducer) Clone() broadway.Producer {
 	return &batchingTestProducer{}
 }

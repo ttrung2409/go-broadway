@@ -17,6 +17,8 @@ type gracefulShutdownTestProducer struct {
 	producedCount int
 }
 
+func (p *gracefulShutdownTestProducer) Init(_ context.Context) {}
+
 func (p *gracefulShutdownTestProducer) Clone() broadway.Producer {
 	return &gracefulShutdownTestProducer{}
 }

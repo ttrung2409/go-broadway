@@ -23,6 +23,8 @@ type partitioningTestProducer struct {
 	count int
 }
 
+func (p *partitioningTestProducer) Init(_ context.Context) {}
+
 func (p *partitioningTestProducer) Clone() broadway.Producer {
 	return &partitioningTestProducer{}
 }
