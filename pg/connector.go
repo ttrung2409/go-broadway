@@ -21,9 +21,9 @@ type Config struct {
 	// Tables are snapshotted sequentially in the order listed.
 	// All tables must have a single-column integer primary key named "id".
 	Tables      []string
-	ChunkSize   int // rows per snapshot chunk (default: 1000)
-	BufferSize  int // internal event buffer capacity (default: 10000)
-	OffsetStore OffsetStore
+	ChunkSize   int         // rows per snapshot chunk (default: 1000)
+	BufferSize  int         // internal event buffer capacity (default: 10000)
+	OffsetStore OffsetStore // persists CDC offsets across restarts; defaults to PostgresOffsetStore backed by the source database
 }
 
 func (c *Config) chunkSizeOrDefault() int {
@@ -110,10 +110,10 @@ func (c *PostgresConnector) HandleDemand(
 			result = append(result, event)
 
 			// track chunk sizes for snapshot READ events
-			if event.operation == OperationRead {
+			if event.Operation == OperationRead {
 				e.mu.Lock()
 				e.chunkSizes[event.chunkID]++
-				e.chunkHighPK[event.chunkID] = event.pk.Value()
+				e.chunkHighPK[event.chunkID] = event.PK.Value()
 				e.mu.Unlock()
 			}
 		default:
@@ -137,11 +137,11 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		chunkACKs := make(map[int]int)
 
 		for _, msg := range messages {
-			event, ok := msg.Payload.(cdcEvent)
+			event, ok := msg.Payload.(CDCEvent)
 			if !ok {
 				continue
 			}
-			if event.operation == OperationRead {
+			if event.Operation == OperationRead {
 				chunkACKs[event.chunkID]++
 			} else if event.commitLSN > maxCommitLSN {
 				maxCommitLSN = event.commitLSN
@@ -291,7 +291,7 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		table := tables[i]
 
 		// resume cursor only for the table we were mid-scan on; fresh tables start unset
-		var cursor pk
+		var cursor PK
 		if i == state.SnapshotTableIdx {
 			cursor = state.SnapshotCursor
 		}

@@ -34,7 +34,7 @@ func newSnapshotter(conn *pgx.Conn, table string, chunkSize int, m *merger) *sna
 // run scans the table from cursor onwards, signalling the merger for each chunk.
 // An unset cursor means start from the beginning of the table.
 // Returns when the table is fully scanned.
-func (s *snapshotter) run(ctx context.Context, cursor pk, startChunkID int) error {
+func (s *snapshotter) run(ctx context.Context, cursor PK, startChunkID int) error {
 	chunkID := startChunkID
 
 	for {
@@ -56,13 +56,13 @@ func (s *snapshotter) run(ctx context.Context, cursor pk, startChunkID int) erro
 		s.merger.onEndChunk(chunkID, s.table, actualHigh, xmin)
 
 		for _, row := range rows {
-			s.merger.onSnapshotEvent(cdcEvent{
-				schema: s.schema,
-				table: s.tableName,
-				operation: OperationRead,
-				pk: row.pk(),
-				after: row,
-				chunkID: chunkID,
+			s.merger.onSnapshotEvent(CDCEvent{
+				Schema:    s.schema,
+				Table:     s.tableName,
+				Operation: OperationRead,
+				PK:        row.PK(),
+				After:     row,
+				chunkID:   chunkID,
 			})
 		}
 
@@ -73,12 +73,12 @@ func (s *snapshotter) run(ctx context.Context, cursor pk, startChunkID int) erro
 
 // readChunk executes a single chunk query inside a REPEATABLE READ transaction.
 // Returns rows, snapshot xmin, and the actual highest id seen.
-func (s *snapshotter) readChunk(ctx context.Context, cursor pk) (
-	rows []row, xmin uint32, high pk, err error,
+func (s *snapshotter) readChunk(ctx context.Context, cursor PK) (
+	rows []Row, xmin uint32, high PK, err error,
 ) {
 	tx, err := s.conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
-		return nil, 0, pk{}, err
+		return nil, 0, PK{}, err
 	}
 	defer func() {
 		if err != nil {
@@ -88,14 +88,14 @@ func (s *snapshotter) readChunk(ctx context.Context, cursor pk) (
 
 	var snapshotText string
 	if err = tx.QueryRow(ctx, `SELECT txid_current_snapshot()`).Scan(&snapshotText); err != nil {
-		return nil, 0, pk{}, err
+		return nil, 0, PK{}, err
 	}
 	xmin = parseXMin(snapshotText)
 
 	query, args := s.buildChunkQuery(cursor)
 	pgxRows, err := tx.Query(ctx, query, args...)
 	if err != nil {
-		return nil, 0, pk{}, err
+		return nil, 0, PK{}, err
 	}
 	defer pgxRows.Close()
 
@@ -108,29 +108,29 @@ func (s *snapshotter) readChunk(ctx context.Context, cursor pk) (
 	for pgxRows.Next() {
 		vals, scanErr := pgxRows.Values()
 		if scanErr != nil {
-			return nil, 0, pk{}, scanErr
+			return nil, 0, PK{}, scanErr
 		}
-		row := make(row, len(colNames))
+		row := make(Row, len(colNames))
 		for i, col := range colNames {
 			row[col] = vals[i]
 		}
 		rows = append(rows, row)
 	}
 	if pgxRows.Err() != nil {
-		return nil, 0, pk{}, pgxRows.Err()
+		return nil, 0, PK{}, pgxRows.Err()
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return nil, 0, pk{}, err
+		return nil, 0, PK{}, err
 	}
 
 	if len(rows) > 0 {
-		high = rows[len(rows)-1].pk()
+		high = rows[len(rows)-1].PK()
 	}
 	return rows, xmin, high, nil
 }
 
-func (s *snapshotter) buildChunkQuery(cursor pk) (string, []any) {
+func (s *snapshotter) buildChunkQuery(cursor PK) (string, []any) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(`SELECT * FROM %s`, s.table))
 

@@ -134,11 +134,11 @@ func (f *fixture) newConnector(chunkSize int, store OffsetStore) *PostgresConnec
 }
 
 type collectingProcessor struct {
-	ch chan cdcEvent
+	ch chan CDCEvent
 }
 
 func newCollectingProcessor() *collectingProcessor {
-	return &collectingProcessor{ch: make(chan cdcEvent, 1000)}
+	return &collectingProcessor{ch: make(chan CDCEvent, 1000)}
 }
 
 func (p *collectingProcessor) Clone() broadway.MessageProcessor { return p }
@@ -153,7 +153,7 @@ func (p *collectingProcessor) Handle(
 			panic(r)
 		}
 	}()
-	if e, ok := msg.Payload.(cdcEvent); ok {
+	if e, ok := msg.Payload.(CDCEvent); ok {
 		p.ch <- e
 	}
 	return msg, nil
@@ -177,9 +177,9 @@ func startPipeline(
 	return p
 }
 
-func collectN(t *testing.T, ch <-chan cdcEvent, n int) []cdcEvent {
+func collectN(t *testing.T, ch <-chan CDCEvent, n int) []CDCEvent {
 	t.Helper()
-	result := make([]cdcEvent, 0, n)
+	result := make([]CDCEvent, 0, n)
 	deadline := time.After(15 * time.Second)
 	for len(result) < n {
 		select {
@@ -192,10 +192,10 @@ func collectN(t *testing.T, ch <-chan cdcEvent, n int) []cdcEvent {
 	return result
 }
 
-func eventIDs(events []cdcEvent) []int64 {
+func eventIDs(events []CDCEvent) []int64 {
 	ids := make([]int64, len(events))
 	for i, e := range events {
-		ids[i] = e.pk.Value()
+		ids[i] = e.PK.Value()
 	}
 	return ids
 }
@@ -212,7 +212,7 @@ func TestIntegration_SnapshotOnly(t *testing.T) {
 	events := collectN(t, processor.ch, 20)
 
 	for _, e := range events {
-		assert.Equal(t, OperationRead, e.operation)
+		assert.Equal(t, OperationRead, e.Operation)
 	}
 	assert.ElementsMatch(t, ids, eventIDs(events))
 }
@@ -240,11 +240,11 @@ func TestIntegration_WALEvents(t *testing.T) {
 
 	events := collectN(t, processor.ch, 3)
 
-	assert.Equal(t, OperationInsert, events[0].operation)
-	assert.Equal(t, OperationUpdate, events[1].operation)
-	assert.Equal(t, OperationDelete, events[2].operation)
+	assert.Equal(t, OperationInsert, events[0].Operation)
+	assert.Equal(t, OperationUpdate, events[1].Operation)
+	assert.Equal(t, OperationDelete, events[2].Operation)
 	for _, e := range events {
-		assert.Equal(t, id, e.pk.Value())
+		assert.Equal(t, id, e.PK.Value())
 	}
 }
 
@@ -286,8 +286,8 @@ func TestIntegration_Concurrent_NoDuplicates(t *testing.T) {
 
 	seen := make(map[int64]int)
 	for _, e := range events {
-		if e.operation == OperationRead || e.operation == OperationInsert {
-			seen[e.pk.Value()]++
+		if e.Operation == OperationRead || e.Operation == OperationInsert {
+			seen[e.PK.Value()]++
 		}
 	}
 
@@ -330,8 +330,8 @@ func TestIntegration_ResumeMidSnapshot(t *testing.T) {
 	<-pipeline2.Terminated() // flush ACKs before t.Cleanup closes the store connection
 
 	for _, e := range events {
-		assert.Equal(t, OperationRead, e.operation)
-		assert.Greater(t, e.pk.Value(), savedCursor,
+		assert.Equal(t, OperationRead, e.Operation)
+		assert.Greater(t, e.PK.Value(), savedCursor,
 			"resumed connector must not re-deliver already-ACKed rows")
 	}
 }

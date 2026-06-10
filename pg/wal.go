@@ -66,7 +66,7 @@ func (w *walStreamer) run(ctx context.Context) error {
 
 	var (
 		currentXID uint32
-		batch      []cdcEvent
+		batch      []CDCEvent
 	)
 
 	for {
@@ -190,14 +190,14 @@ func (w *walStreamer) decodeInsert(
 	rel *pglogrepl.RelationMessageV2,
 	m *pglogrepl.InsertMessageV2,
 	xid uint32,
-) cdcEvent {
+) CDCEvent {
 	after := decodeTuple(rel, m.Tuple)
-	return cdcEvent{
-		schema: rel.Namespace,
-		table: rel.RelationName,
-		operation: OperationInsert,
-		pk: extractPKFromRelation(rel, after),
-		after: after,
+	return CDCEvent{
+		Schema:    rel.Namespace,
+		Table:     rel.RelationName,
+		Operation: OperationInsert,
+		PK:        extractPKFromRelation(rel, after),
+		After:     after,
 		commitXID: xid,
 	}
 }
@@ -206,19 +206,19 @@ func (w *walStreamer) decodeUpdate(
 	rel *pglogrepl.RelationMessageV2,
 	m *pglogrepl.UpdateMessageV2,
 	xid uint32,
-) cdcEvent {
+) CDCEvent {
 	after := decodeTuple(rel, m.NewTuple)
-	var before row
+	var before Row
 	if m.OldTuple != nil {
 		before = decodeTuple(rel, m.OldTuple)
 	}
-	return cdcEvent{
-		schema: rel.Namespace,
-		table: rel.RelationName,
-		operation: OperationUpdate,
-		pk: extractPKFromRelation(rel, after),
-		before: before,
-		after: after,
+	return CDCEvent{
+		Schema:    rel.Namespace,
+		Table:     rel.RelationName,
+		Operation: OperationUpdate,
+		PK:        extractPKFromRelation(rel, after),
+		Before:    before,
+		After:     after,
 		commitXID: xid,
 	}
 }
@@ -227,24 +227,24 @@ func (w *walStreamer) decodeDelete(
 	rel *pglogrepl.RelationMessageV2,
 	m *pglogrepl.DeleteMessageV2,
 	xid uint32,
-) cdcEvent {
+) CDCEvent {
 	before := decodeTuple(rel, m.OldTuple)
-	return cdcEvent{
-		schema: rel.Namespace,
-		table: rel.RelationName,
-		operation: OperationDelete,
-		pk: extractPKFromRelation(rel, before),
-		before: before,
+	return CDCEvent{
+		Schema:    rel.Namespace,
+		Table:     rel.RelationName,
+		Operation: OperationDelete,
+		PK:        extractPKFromRelation(rel, before),
+		Before:    before,
 		commitXID: xid,
 	}
 }
 
 // decodeTuple converts a pglogrepl TupleData into a map of column name → value.
-func decodeTuple(rel *pglogrepl.RelationMessageV2, tuple *pglogrepl.TupleData) row {
+func decodeTuple(rel *pglogrepl.RelationMessageV2, tuple *pglogrepl.TupleData) Row {
 	if tuple == nil {
 		return nil
 	}
-	row := make(row, len(rel.Columns))
+	row := make(Row, len(rel.Columns))
 	for i, col := range rel.Columns {
 		if i >= len(tuple.Columns) {
 			break
@@ -263,7 +263,7 @@ func decodeTuple(rel *pglogrepl.RelationMessageV2, tuple *pglogrepl.TupleData) r
 }
 
 // extractPKFromRelation returns the PK for the row using the replica identity columns.
-func extractPKFromRelation(rel *pglogrepl.RelationMessageV2, row row) pk {
+func extractPKFromRelation(rel *pglogrepl.RelationMessageV2, row Row) PK {
 	for _, col := range rel.Columns {
 		if col.Flags == 1 { // part of replica identity
 			return pkFromValue(row[col.Name])
@@ -273,5 +273,5 @@ func extractPKFromRelation(rel *pglogrepl.RelationMessageV2, row row) pk {
 	if len(rel.Columns) > 0 {
 		return pkFromValue(row[rel.Columns[0].Name])
 	}
-	return pk{}
+	return PK{}
 }

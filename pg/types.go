@@ -5,16 +5,16 @@ import (
 	"strconv"
 )
 
-type pk struct {
+type PK struct {
 	value *int64
 }
 
-func pkAt(v int64) pk      { return pk{value: &v} }
-func pkFromValue(v any) pk { return pkAt(toInt64(v)) }
-func (p pk) IsSet() bool   { return p.value != nil }
-func (p pk) Value() int64  { return *p.value }
+func pkAt(v int64) PK      { return PK{value: &v} }
+func pkFromValue(v any) PK { return pkAt(toInt64(v)) }
+func (p PK) IsSet() bool   { return p.value != nil }
+func (p PK) Value() int64  { return *p.value }
 
-func (p pk) Next(n int) pk {
+func (p PK) Next(n int) PK {
 	if p.value == nil {
 		return p
 	}
@@ -23,19 +23,19 @@ func (p pk) Next(n int) pk {
 
 // inRange reports whether p falls within (low, high].
 // An unset low means unbounded start; an unset high means unbounded end.
-func (p pk) inRange(low, high pk) bool {
+func (p PK) inRange(low, high PK) bool {
 	return (low.value == nil || *p.value > *low.value) &&
 		(high.value == nil || *p.value <= *high.value)
 }
 
-func (p pk) MarshalJSON() ([]byte, error) {
+func (p PK) MarshalJSON() ([]byte, error) {
 	if p.value == nil {
 		return []byte("null"), nil
 	}
 	return json.Marshal(*p.value)
 }
 
-func (p *pk) UnmarshalJSON(b []byte) error {
+func (p *PK) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
 		p.value = nil
 		return nil
@@ -60,26 +60,27 @@ func toInt64(v any) int64 {
 	}
 }
 
-type operationType string
+type OperationType string
 
 const (
-	OperationInsert operationType = "INSERT"
-	OperationUpdate operationType = "UPDATE"
-	OperationDelete operationType = "DELETE"
-	OperationRead   operationType = "READ"
+	OperationInsert OperationType = "INSERT"
+	OperationUpdate OperationType = "UPDATE"
+	OperationDelete OperationType = "DELETE"
+	OperationRead   OperationType = "READ"
 )
 
-type row map[string]any
+type Row map[string]any
 
-func (r row) pk() pk { return pkFromValue(r["id"]) }
+func (r Row) PK() PK { return pkFromValue(r["id"]) }
 
-type cdcEvent struct {
-	schema    string
-	table     string
-	operation operationType
-	pk        pk
-	before    row
-	after     row
+type CDCEvent struct {
+	Schema    string
+	Table     string
+	Operation OperationType
+	PK        PK
+	Before    Row
+	After     Row
+
 	commitXID uint32
 	commitLSN uint64
 	chunkID   int
@@ -97,18 +98,18 @@ type cdcState struct {
 	SlotName         string    `json:"slot_name"`
 	ConfirmedLSN     uint64    `json:"confirmed_lsn"`
 	SnapshotTableIdx int       `json:"snapshot_table_idx"`
-	SnapshotCursor   pk        `json:"snapshot_cursor,omitempty"`
+	SnapshotCursor   PK        `json:"snapshot_cursor,omitempty"`
 	ScannedPKRanges  []pkRange `json:"scanned_pk_ranges,omitempty"`
 }
 
 type pkRange struct {
 	Table string `json:"table"`
-	Low   pk     `json:"low"`
-	High  pk     `json:"high"`
+	Low   PK     `json:"low"`
+	High  PK     `json:"high"`
 	XMin  uint32 `json:"xmin"`
 }
 
 type walBatch struct {
-	events    []cdcEvent
+	events    []CDCEvent
 	commitLSN uint64
 }

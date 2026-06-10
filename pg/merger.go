@@ -13,29 +13,29 @@ type merger struct {
 	phase            phase
 	scannedRanges    []pkRange
 	currentChunk     *chunk
-	pendingWALEvents []cdcEvent
+	pendingWALEvents []CDCEvent
 
-	output chan cdcEvent
+	output chan CDCEvent
 }
 
 type chunk struct {
 	chunkID int
 	table   string
-	pkLow   pk
-	pkHigh  pk
+	pkLow   PK
+	pkHigh  PK
 }
 
 func newMerger(bufferSize int, initialRanges []pkRange, phase phase) *merger {
 	return &merger{
 		phase:         phase,
 		scannedRanges: initialRanges,
-		output:        make(chan cdcEvent, bufferSize),
+		output:        make(chan CDCEvent, bufferSize),
 	}
 }
 
 // onBeginChunk is called by the scanner before executing a chunk query.
 // pkLow/pkHigh are the estimated id bounds; the merger buffers WAL events in this range.
-func (m *merger) onBeginChunk(chunkID int, table string, pkLow, pkHigh pk) {
+func (m *merger) onBeginChunk(chunkID int, table string, pkLow, pkHigh PK) {
 	m.mu.Lock()
 	m.currentChunk = &chunk{
 		chunkID: chunkID,
@@ -52,7 +52,7 @@ func (m *merger) onBeginChunk(chunkID int, table string, pkLow, pkHigh pk) {
 // range are carried forward as overflow: they will be re-evaluated by the
 // chunk that actually covers their id, preventing the snapshot from emitting
 // a READ and the overflow from also emitting an INSERT for the same row.
-func (m *merger) onEndChunk(chunkID int, table string, actualIDHigh pk, xmin uint32) {
+func (m *merger) onEndChunk(chunkID int, table string, actualIDHigh PK, xmin uint32) {
 	m.mu.Lock()
 
 	if m.currentChunk == nil || m.currentChunk.chunkID != chunkID {
@@ -69,9 +69,9 @@ func (m *merger) onEndChunk(chunkID int, table string, actualIDHigh pk, xmin uin
 	pending := m.pendingWALEvents
 	m.pendingWALEvents = nil
 
-	var toEmit []cdcEvent
+	var toEmit []CDCEvent
 	for _, event := range pending {
-		if event.pk.inRange(pkLow, actualIDHigh) {
+		if event.PK.inRange(pkLow, actualIDHigh) {
 			if event.commitXID >= xmin {
 				toEmit = append(toEmit, event)
 			}
@@ -106,7 +106,7 @@ func (m *merger) onSnapshotComplete() {
 }
 
 // onSnapshotEvent routes a READ event from the scanner directly to output.
-func (m *merger) onSnapshotEvent(event cdcEvent) {
+func (m *merger) onSnapshotEvent(event CDCEvent) {
 	m.output <- event
 }
 
@@ -122,8 +122,8 @@ func (m *merger) onWALBatch(batch walBatch) {
 }
 
 // collectWALBatch applies routing/deduplication for a batch, returning events to emit.
-func (m *merger) collectWALBatch(batch walBatch) []cdcEvent {
-	var toEmit []cdcEvent
+func (m *merger) collectWALBatch(batch walBatch) []CDCEvent {
+	var toEmit []CDCEvent
 	for _, event := range batch.events {
 		event.commitLSN = batch.commitLSN
 		if e, ok := m.routeEvent(event); ok {
@@ -135,20 +135,20 @@ func (m *merger) collectWALBatch(batch walBatch) []cdcEvent {
 
 // routeEvent returns the event and whether it should be emitted.
 // Buffers the event in pendingWALEvents or discards it when appropriate.
-func (m *merger) routeEvent(event cdcEvent) (cdcEvent, bool) {
+func (m *merger) routeEvent(event CDCEvent) (CDCEvent, bool) {
 	if m.phase == PhaseStreaming {
 		return event, true
 	}
 
-	qualifiedTable := qualifyTable(event.schema, event.table)
+	qualifiedTable := qualifyTable(event.Schema, event.Table)
 
-	if r := findScannedRange(m.scannedRanges, qualifiedTable, event.pk); r != nil {
+	if r := findScannedRange(m.scannedRanges, qualifiedTable, event.PK); r != nil {
 		return event, event.commitXID >= r.XMin
 	}
 
 	if m.currentChunk != nil &&
 		m.currentChunk.table == qualifiedTable &&
-		event.pk.inRange(m.currentChunk.pkLow, m.currentChunk.pkHigh) {
+		event.PK.inRange(m.currentChunk.pkLow, m.currentChunk.pkHigh) {
 		m.pendingWALEvents = append(m.pendingWALEvents, event)
 		return event, false
 	}
@@ -164,7 +164,7 @@ func qualifyTable(schema, table string) string {
 	return schema + "." + table
 }
 
-func findScannedRange(ranges []pkRange, table string, id pk) *pkRange {
+func findScannedRange(ranges []pkRange, table string, id PK) *pkRange {
 	for i := range ranges {
 		r := &ranges[i]
 		if r.Table == table && id.inRange(r.Low, r.High) {

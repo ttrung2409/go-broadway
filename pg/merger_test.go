@@ -7,8 +7,8 @@ import (
 )
 
 // drain collects all events currently buffered in the merger's output channel.
-func drain(m *merger) []cdcEvent {
-	var events []cdcEvent
+func drain(m *merger) []CDCEvent {
+	var events []CDCEvent
 	for {
 		select {
 		case e := <-m.output:
@@ -19,26 +19,26 @@ func drain(m *merger) []cdcEvent {
 	}
 }
 
-// makeWALEvent builds a minimal WAL-style cdcEvent.
+// makeWALEvent builds a minimal WAL-style CDCEvent.
 // id is a string because pgoutput tuple columns are decoded as text.
-func makeWALEvent(qualifiedTable, id string, xid uint32) cdcEvent {
+func makeWALEvent(qualifiedTable, id string, xid uint32) CDCEvent {
 	schema, table := splitQualifiedTable(qualifiedTable)
-	return cdcEvent{
-		schema: schema,
-		table:     table,
-		operation: OperationInsert,
-		pk: pkFromValue(id),
+	return CDCEvent{
+		Schema:    schema,
+		Table:     table,
+		Operation: OperationInsert,
+		PK:        pkFromValue(id),
 		commitXID: xid,
 	}
 }
 
-func sendWAL(m *merger, event cdcEvent, lsn uint64) {
-	m.onWALBatch(walBatch{events: []cdcEvent{event}, commitLSN: lsn})
+func sendWAL(m *merger, event CDCEvent, lsn uint64) {
+	m.onWALBatch(walBatch{events: []CDCEvent{event}, commitLSN: lsn})
 }
 
 func TestMerger_ScannedRange_BelowXMin_Discarded(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
 	sendWAL(m, makeWALEvent("public.orders", "500", 850), 1) // XID 850 < xmin 900
@@ -48,7 +48,7 @@ func TestMerger_ScannedRange_BelowXMin_Discarded(t *testing.T) {
 
 func TestMerger_ScannedRange_AboveXMin_Emitted(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
 	sendWAL(m, makeWALEvent("public.orders", "500", 950), 1) // XID 950 >= xmin 900
@@ -58,7 +58,7 @@ func TestMerger_ScannedRange_AboveXMin_Emitted(t *testing.T) {
 
 func TestMerger_ScannedRange_EqualXMin_Emitted(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
 	sendWAL(m, makeWALEvent("public.orders", "500", 900), 1) // XID 900 == xmin 900
@@ -68,7 +68,7 @@ func TestMerger_ScannedRange_EqualXMin_Emitted(t *testing.T) {
 
 func TestMerger_InProgressChunk_AboveXMin_EmittedAfterEnd(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 
 	sendWAL(m, makeWALEvent("public.orders", "500", 950), 1)
 	assert.Empty(t, drain(m)) // buffered, not yet emitted
@@ -80,7 +80,7 @@ func TestMerger_InProgressChunk_AboveXMin_EmittedAfterEnd(t *testing.T) {
 
 func TestMerger_InProgressChunk_BelowXMin_DiscardedAfterEnd(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 
 	sendWAL(m, makeWALEvent("public.orders", "500", 850), 1)
 	assert.Empty(t, drain(m))
@@ -92,7 +92,7 @@ func TestMerger_InProgressChunk_BelowXMin_DiscardedAfterEnd(t *testing.T) {
 
 func TestMerger_UnscannedPK_Discarded(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
 	// id=2000 is beyond the scanned range and no chunk is in progress
@@ -103,7 +103,7 @@ func TestMerger_UnscannedPK_Discarded(t *testing.T) {
 
 func TestMerger_DifferentTable_NotMatchedByRange(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
 	// same id range but different table — not yet scanned, should be discarded
@@ -114,15 +114,15 @@ func TestMerger_DifferentTable_NotMatchedByRange(t *testing.T) {
 
 func TestMerger_SnapshotEvent_AlwaysEmitted(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pkAt(1000))
+	m.onBeginChunk(1, "public.orders", PK{}, pkAt(1000))
 	m.onEndChunk(1, "public.orders", pkAt(1000), 900)
 
-	m.onSnapshotEvent(cdcEvent{
-		schema: "public",
-		table:     "orders",
-		operation: OperationRead,
-		pk: pkFromValue(int64(500)),
-		chunkID: 1,
+	m.onSnapshotEvent(CDCEvent{
+		Schema:    "public",
+		Table:     "orders",
+		Operation: OperationRead,
+		PK:        pkFromValue(int64(500)),
+		chunkID:   1,
 	})
 
 	assert.Len(t, drain(m), 1)
@@ -132,7 +132,7 @@ func TestMerger_StreamingPhase_AllWALEventsEmitted(t *testing.T) {
 	m := newMerger(100, nil, PhaseStreaming)
 
 	m.onWALBatch(walBatch{
-		events: []cdcEvent{
+		events: []CDCEvent{
 			makeWALEvent("public.orders", "1", 100),
 			makeWALEvent("public.orders", "2", 101),
 		},
@@ -167,7 +167,7 @@ func TestMerger_CommitLSN_AttachedToEmittedEvent(t *testing.T) {
 
 func TestMerger_Overflow_NotEmittedByChunkWithSmallerActualHigh(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
-	m.onBeginChunk(1, "public.orders", pk{}, pk{}) // unbounded estimated high
+	m.onBeginChunk(1, "public.orders", PK{}, PK{}) // unbounded estimated high
 
 	sendWAL(m, makeWALEvent("public.orders", "51", 950), 1)
 	assert.Empty(t, drain(m)) // buffered
@@ -181,7 +181,7 @@ func TestMerger_Overflow_DeduplicatedByLaterChunk_BelowXMin(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
 
 	// chunk 1: rows 1-10; id=51 XID=150 overflows
-	m.onBeginChunk(1, "public.orders", pk{}, pk{})
+	m.onBeginChunk(1, "public.orders", PK{}, PK{})
 	sendWAL(m, makeWALEvent("public.orders", "51", 150), 1)
 	m.onEndChunk(1, "public.orders", pkAt(10), 100)
 	assert.Empty(t, drain(m))
@@ -197,7 +197,7 @@ func TestMerger_Overflow_DeduplicatedByLaterChunk_AboveXMin(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
 
 	// chunk 1: rows 1-10; id=51 XID=250 overflows
-	m.onBeginChunk(1, "public.orders", pk{}, pk{})
+	m.onBeginChunk(1, "public.orders", PK{}, PK{})
 	sendWAL(m, makeWALEvent("public.orders", "51", 250), 1)
 	m.onEndChunk(1, "public.orders", pkAt(10), 100)
 	assert.Empty(t, drain(m))
@@ -213,7 +213,7 @@ func TestMerger_Overflow_EmittedOnSnapshotComplete(t *testing.T) {
 	m := newMerger(100, nil, PhaseSnapshotting)
 
 	// chunk 1 overflow; snapshot ends without ever scanning id=51
-	m.onBeginChunk(1, "public.orders", pk{}, pk{})
+	m.onBeginChunk(1, "public.orders", PK{}, PK{})
 	sendWAL(m, makeWALEvent("public.orders", "51", 200), 1)
 	m.onEndChunk(1, "public.orders", pkAt(10), 100)
 	assert.Empty(t, drain(m))
@@ -227,25 +227,25 @@ func TestMerger_NoDuplicate_OverflowDiscardedWhenSnapshotCapturedRow(t *testing.
 	m := newMerger(100, nil, PhaseSnapshotting)
 
 	// chunk 1 overflow for id=51 (XID=150 < xmin6=200 → snapshot captured it)
-	m.onBeginChunk(1, "public.orders", pk{}, pk{})
+	m.onBeginChunk(1, "public.orders", PK{}, PK{})
 	sendWAL(m, makeWALEvent("public.orders", "51", 150), 1)
 	m.onEndChunk(1, "public.orders", pkAt(10), 100)
 
 	m.onBeginChunk(6, "public.orders", pkAt(50), pkAt(60))
 	m.onEndChunk(6, "public.orders", pkAt(60), 200) // overflow discarded
 
-	m.onSnapshotEvent(cdcEvent{ // snapshot emits READ for id=51
-		schema: "public", table: "orders", operation: OperationRead,
-		pk: pkFromValue(int64(51)), chunkID: 6,
+	m.onSnapshotEvent(CDCEvent{ // snapshot emits READ for id=51
+		Schema: "public", Table: "orders", Operation: OperationRead,
+		PK: pkFromValue(int64(51)), chunkID: 6,
 	})
 
 	events := drain(m)
 	assert.Len(t, events, 1)
-	assert.Equal(t, OperationRead, events[0].operation) // READ only, no duplicate INSERT
+	assert.Equal(t, OperationRead, events[0].Operation) // READ only, no duplicate INSERT
 }
 
 func TestMerger_RestoredRanges_DeduplicateCorrectly(t *testing.T) {
-	saved := []pkRange{{Table: "public.orders", Low: pk{}, High: pkAt(1000), XMin: 900}}
+	saved := []pkRange{{Table: "public.orders", Low: PK{}, High: pkAt(1000), XMin: 900}}
 	m := newMerger(100, saved, PhaseSnapshotting)
 
 	// already-scanned range: XID below xmin → discarded
