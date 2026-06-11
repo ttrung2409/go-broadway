@@ -276,7 +276,7 @@ func (c *PostgresConnector) start(ctx context.Context) {
 		}
 
 		go func() {
-			defer snapConn.Close(ctx)
+			defer func() { _ = snapConn.Close(ctx) }()
 			c.runSnapshot(ctx, snapConn, state)
 		}()
 	}
@@ -332,9 +332,7 @@ func (c *PostgresConnector) ensurePublication(ctx context.Context, conn *pgx.Con
 	}
 
 	tables := make([]string, len(c.config.Tables))
-	for i, t := range c.config.Tables {
-		tables[i] = t
-	}
+	copy(tables, c.config.Tables)
 	_, err := conn.Exec(ctx, fmt.Sprintf(
 		`CREATE PUBLICATION %s FOR TABLE %s`,
 		pgQuoteIdent(c.config.Publication),

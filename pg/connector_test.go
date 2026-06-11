@@ -87,14 +87,14 @@ func newFixture(t *testing.T) *fixture {
 
 	t.Cleanup(func() {
 		bg := context.Background()
-		conn.Exec(bg, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, f.table))
-		conn.Exec(bg, fmt.Sprintf(
+		_, _ = conn.Exec(bg, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, f.table))
+		_, _ = conn.Exec(bg, fmt.Sprintf(
 			`SELECT pg_drop_replication_slot('%s') WHERE EXISTS `+
 				`(SELECT 1 FROM pg_replication_slots WHERE slot_name='%s')`,
 			f.slotName, f.slotName,
 		))
-		conn.Exec(bg, fmt.Sprintf(`DROP PUBLICATION IF EXISTS %s`, pgQuoteIdent(f.publication)))
-		conn.Close(bg)
+		_, _ = conn.Exec(bg, fmt.Sprintf(`DROP PUBLICATION IF EXISTS %s`, pgQuoteIdent(f.publication)))
+		_ = conn.Close(bg)
 	})
 
 	return f
@@ -116,7 +116,7 @@ func (f *fixture) insert(t *testing.T, n int) []int64 {
 func (f *fixture) offsetStore(t *testing.T) *PostgresOffsetStore {
 	conn, err := pgx.Connect(context.Background(), f.dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close(context.Background()) })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	store := NewPostgresOffsetStore(conn, f.slotName)
 	require.NoError(t, store.Init(context.Background()))
 	return store

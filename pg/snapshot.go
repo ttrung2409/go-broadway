@@ -148,7 +148,7 @@ func (s *snapshotter) buildChunkQuery(cursor PK) (string, []any) {
 // Format: "xmin:xmax:xip_list"
 func parseXMin(s string) uint32 {
 	var xmin uint32
-	fmt.Sscanf(s, "%d:", &xmin)
+	_, _ = fmt.Sscanf(s, "%d:", &xmin)
 	return xmin
 }
 

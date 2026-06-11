@@ -45,7 +45,7 @@ func newWALStreamer(
 // run starts logical replication from startLSN and streams events until ctx is cancelled.
 // The replication connection is closed on return so the slot is released immediately.
 func (w *walStreamer) run(ctx context.Context) error {
-	defer w.conn.Close(context.Background())
+	defer func() { _ = w.conn.Close(context.Background()) }()
 	pluginArgs := []string{
 		"proto_version '2'",
 		fmt.Sprintf("publication_names '%s'", w.publication),
