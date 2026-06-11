@@ -222,6 +222,10 @@ func (p *producer) sendMessages(messages []*Message) {
 			return
 		}
 
+		if p._terminated.Load() {
+			return
+		}
+
 		for _, request := range p._requests.toSlice() {
 			if len(messages) == 0 {
 				break
@@ -266,6 +270,10 @@ func (p *producer) sendPartitionedMessages(messages []*Message) {
 	for {
 
 		if len(partitionedMessages) == 0 {
+			return
+		}
+
+		if p._terminated.Load() {
 			return
 		}
 
