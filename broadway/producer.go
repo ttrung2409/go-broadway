@@ -29,15 +29,15 @@ type Producer interface {
 	//   - ctx: The context provided when starting the pipeline.
 	Init(ctx context.Context)
 
-	// HandleDemand generates message payloads in response to demand from the pipeline.
+	// HandleDemand produces messages in response to demand from the pipeline.
 	//
 	// Parameters:
 	//   - demand: The number of messages requested by the pipeline.
 	//   - ctx: The context provided when starting the pipeline.
 	//
 	// Returns:
-	//   - A slice of message payloads
-	HandleDemand(demand int, ctx context.Context) []MessagePayload
+	//   - A slice of messages
+	HandleDemand(demand int, ctx context.Context) []*Message
 
 	// Clone creates a new instance of the producer.
 	// This method is used to create multiple instances of the producer
@@ -176,23 +176,19 @@ func (p *producer) processRequests(ctx context.Context) {
 			continue
 		}
 
-		payloads := make([]MessagePayload, 0)
+		var messages []*Message
 		if !p._terminated.Load() {
-			payloads = p.producer.HandleDemand(totalDemand, ctx)
+			messages = p.producer.HandleDemand(totalDemand, ctx)
 		}
 
-		messages := lo.Map(payloads, func(payload MessagePayload, _ int) *Message {
-			partitionKey := ""
-			if p.config.partitionKeyResolver != nil {
-				partitionKey = p.config.partitionKeyResolver(payload)
+		for _, message := range messages {
+			if message.ack == nil {
+				message.ack = p._messageAck
 			}
-
-			message := newMessage(
-				messageArgs{payload: payload, ack: p._messageAck, partitionKey: partitionKey},
-			)
-
-			return message
-		})
+			if p.config.partitionKeyResolver != nil {
+				message.partitionKey = p.config.partitionKeyResolver(message.Payload)
+			}
+		}
 
 		if p.config.partitionKeyResolver != nil {
 			p.sendPartitionedMessages(messages)
@@ -264,7 +260,7 @@ func (p *producer) sendMessages(messages []*Message) {
 func (p *producer) sendPartitionedMessages(messages []*Message) {
 
 	partitionedMessages := lo.GroupBy(messages, func(message *Message) string {
-		return message.PartitionKey
+		return message.partitionKey
 	})
 
 	for {

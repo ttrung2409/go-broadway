@@ -35,12 +35,12 @@ const partitioningTestTotalUsers = 10
 func (p *partitioningTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
-	result := make([]broadway.MessagePayload, 0)
+) []*broadway.Message {
+	result := make([]*broadway.Message, 0)
 	actions := []string{"view", "click", "purchase"}
 
 	if p.count > partitioningTestTotalMessages {
-		return []broadway.MessagePayload{}
+		return []*broadway.Message{}
 	}
 
 	demand = min(demand, partitioningTestTotalMessages-p.count)
@@ -52,11 +52,11 @@ func (p *partitioningTestProducer) HandleDemand(
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			&partitioningTestMessage{
+			broadway.NewMessage(&partitioningTestMessage{
 				UserId: userIds[p.count%partitioningTestTotalUsers],
 				Action: actions[p.count%len(actions)],
 				Order:  p.count,
-			},
+			}),
 		)
 
 		p.count++

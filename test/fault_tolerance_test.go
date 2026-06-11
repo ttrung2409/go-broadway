@@ -46,10 +46,10 @@ func (p *faultToleranceTestProducer) Clone() broadway.Producer {
 func (p *faultToleranceTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
+) []*broadway.Message {
 
 	if producedCount > faultToleranceTestTotalMessages {
-		return []broadway.MessagePayload{}
+		return []*broadway.Message{}
 	}
 
 	if p.shouldPanic && producedCount > faultToleranceTestTotalMessages/2 {
@@ -63,15 +63,15 @@ func (p *faultToleranceTestProducer) HandleDemand(
 		userIds = append(userIds, uuid.NewString())
 	}
 
-	result := []broadway.MessagePayload{}
+	result := []*broadway.Message{}
 
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			&faultToleranceTestMessage{
+			broadway.NewMessage(&faultToleranceTestMessage{
 				UserId: userIds[producedCount%faultToleranceTestTotalUsers],
 				Order:  producedCount,
-			},
+			}),
 		)
 
 		producedCount++

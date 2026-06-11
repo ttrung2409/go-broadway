@@ -28,19 +28,16 @@ const gracefulShutdownTestTotalMessages = 100
 func (p *gracefulShutdownTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
+) []*broadway.Message {
 
-	result := make([]broadway.MessagePayload, 0)
+	result := make([]*broadway.Message, 0)
 
 	if p.producedCount >= gracefulShutdownTestTotalMessages {
-		return []broadway.MessagePayload{}
+		return []*broadway.Message{}
 	}
 
 	for i := 0; i < gracefulShutdownTestTotalMessages*5; i++ {
-		result = append(
-			result,
-			gracefulShutdownTestMessage{},
-		)
+		result = append(result, broadway.NewMessage(gracefulShutdownTestMessage{}))
 	}
 
 	p.producedCount += gracefulShutdownTestTotalMessages * 5

@@ -104,17 +104,16 @@ func (c *PostgresConnector) Clone() broadway.Producer {
 func (c *PostgresConnector) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
+) []*broadway.Message {
 
 	e := c.engine
-	result := make([]broadway.MessagePayload, 0, demand)
+	result := make([]*broadway.Message, 0, demand)
 	for i := 0; i < demand; i++ {
 		select {
 		case event, ok := <-e.merger.output:
 			if !ok {
 				return result
 			}
-			result = append(result, event)
 
 			// track chunk sizes for snapshot READ events
 			if event.Operation == OperationRead {
@@ -123,6 +122,10 @@ func (c *PostgresConnector) HandleDemand(
 				e.chunkHighPK[event.chunkID] = event.PK
 				e.mu.Unlock()
 			}
+
+			msg := broadway.NewMessage(event)
+			msg.Metadata = event // preserved for the Acknowledger
+			result = append(result, msg)
 		default:
 			return result
 		}
@@ -144,7 +147,7 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		chunkACKs := make(map[int]int)
 
 		for _, msg := range messages {
-			event, ok := msg.Payload.(CDCEvent)
+			event, ok := msg.Metadata.(CDCEvent)
 			if !ok {
 				continue
 			}

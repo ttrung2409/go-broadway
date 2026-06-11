@@ -37,12 +37,12 @@ const batchingTestTotalUsers = 10
 func (p *batchingTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
-	result := make([]broadway.MessagePayload, 0)
+) []*broadway.Message {
+	result := make([]*broadway.Message, 0)
 	actions := []string{"view", "click", "purchase"}
 
 	if p.count > batchingTestTotalMessages {
-		return []broadway.MessagePayload{}
+		return []*broadway.Message{}
 	}
 
 	demand = min(demand, batchingTestTotalMessages-p.count)
@@ -55,12 +55,12 @@ func (p *batchingTestProducer) HandleDemand(
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			&batchingTestMessage{
+			broadway.NewMessage(&batchingTestMessage{
 				UserId: userIds[p.count%batchingTestTotalUsers],
 				Action: actions[p.count%len(actions)],
 				Tenant: fmt.Sprintf("tenant %d", p.count%2),
 				Order:  p.count,
-			},
+			}),
 		)
 
 		p.count++

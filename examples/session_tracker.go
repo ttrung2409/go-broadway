@@ -23,7 +23,7 @@ func (t *UserSessionTracker) Handle(
 	ctx context.Context,
 ) ([]*broadway.Message, error) {
 
-	userId := messages[0].PartitionKey
+	userId := messages[0].Payload.(UserActivity).UserID
 
 	session, ok := t.userSessions[userId]
 	if !ok {

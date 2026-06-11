@@ -8,7 +8,3 @@ package broadway
 //   - err: Any error that occurred during processing, or nil if processing was successful.
 type Acknowledger func(messages []*Message, err error)
 
-func defaultAck() Acknowledger {
-	return func(messages []*Message, err error) {
-	}
-}

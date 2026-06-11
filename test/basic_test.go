@@ -36,12 +36,12 @@ const basicTestTotalUsers = 10
 func (p *basicTestProducer) HandleDemand(
 	demand int,
 	ctx context.Context,
-) []broadway.MessagePayload {
+) []*broadway.Message {
 
-	result := make([]broadway.MessagePayload, 0)
+	result := make([]*broadway.Message, 0)
 
 	if p.producedCount >= basicTestTotalMessages {
-		return []broadway.MessagePayload{}
+		return []*broadway.Message{}
 	}
 
 	demand = min(demand, basicTestTotalMessages-p.producedCount)
@@ -56,11 +56,11 @@ func (p *basicTestProducer) HandleDemand(
 
 		result = append(
 			result,
-			basicTestMessage{
+			broadway.NewMessage(basicTestMessage{
 				Id:         fmt.Sprintf("message %d", p.producedCount),
 				UserId:     userIds[p.producedCount%basicTestTotalUsers],
 				ShouldFail: p.failedCount < p.totalFailed && failed,
-			},
+			}),
 		)
 
 		if p.failedCount < p.totalFailed && failed {
