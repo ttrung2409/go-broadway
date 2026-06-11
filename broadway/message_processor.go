@@ -230,8 +230,8 @@ func (p *messageProcessor) process(messages []*Message, ctx context.Context) []*
 			processedMessage.BatchKey = defaultBatchKey
 		}
 
-		if processedMessage.PartitionKey != "" {
-			processedMessage.BatchKey = processedMessage.PartitionKey
+		if processedMessage.partitionKey != "" && processedMessage.BatchKey == defaultBatchKey {
+			processedMessage.BatchKey = processedMessage.partitionKey
 		}
 
 		if (!hasBatchers || err != nil) && processedMessage.ack != nil {
