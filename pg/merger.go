@@ -10,8 +10,8 @@ import (
 type merger struct {
 	mu sync.Mutex
 
-	phase            phase
-	scannedRanges    []pkRange
+	phase            Phase
+	scannedRanges    []PKRange
 	currentChunk     *chunk
 	pendingWALEvents []CDCEvent
 
@@ -25,9 +25,9 @@ type chunk struct {
 	pkHigh  PK
 }
 
-func newMerger(bufferSize int, initialRanges []pkRange, phase phase) *merger {
+func newMerger(bufferSize int, initialRanges []PKRange, Phase Phase) *merger {
 	return &merger{
-		phase:         phase,
+		phase:         Phase,
 		scannedRanges: initialRanges,
 		output:        make(chan CDCEvent, bufferSize),
 	}
@@ -63,7 +63,7 @@ func (m *merger) onEndChunk(chunkID int, table string, actualIDHigh PK, xmin uin
 	pkLow := m.currentChunk.pkLow
 	m.currentChunk = nil
 
-	completed := pkRange{Table: table, Low: pkLow, High: actualIDHigh, XMin: xmin}
+	completed := PKRange{Table: table, Low: pkLow, High: actualIDHigh, XMin: xmin}
 	m.scannedRanges = append(m.scannedRanges, completed)
 
 	pending := m.pendingWALEvents
@@ -164,7 +164,7 @@ func qualifyTable(schema, table string) string {
 	return schema + "." + table
 }
 
-func findScannedRange(ranges []pkRange, table string, id PK) *pkRange {
+func findScannedRange(ranges []PKRange, table string, id PK) *PKRange {
 	for i := range ranges {
 		r := &ranges[i]
 		if r.Table == table && id.inRange(r.Low, r.High) {

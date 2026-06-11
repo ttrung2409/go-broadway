@@ -8,9 +8,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type OffsetStore interface {
-	Load(ctx context.Context) (cdcState, bool, error)
-	Save(ctx context.Context, state cdcState) error
+// OffsetStore persists and retrieves connector state so the connector can resume
+// from the last confirmed position after a crash rather than replaying from scratch.
+// TState is defined by the client and carries whatever fields are needed for resume.
+type OffsetStore[TState any] interface {
+	Load(ctx context.Context) (TState, bool, error)
+	Save(ctx context.Context, state TState) error
 }
 
 // PostgresOffsetStore persists CDC state in a table in the source database.
@@ -34,7 +37,7 @@ func (s *PostgresOffsetStore) Init(ctx context.Context) error {
 	return err
 }
 
-func (s *PostgresOffsetStore) Load(ctx context.Context) (cdcState, bool, error) {
+func (s *PostgresOffsetStore) Load(ctx context.Context) (CDCState, bool, error) {
 	var raw []byte
 	err := s.conn.QueryRow(ctx,
 		`SELECT state FROM _pgcdc_offsets WHERE slot_name = $1`,
@@ -42,20 +45,20 @@ func (s *PostgresOffsetStore) Load(ctx context.Context) (cdcState, bool, error) 
 	).Scan(&raw)
 
 	if err == pgx.ErrNoRows {
-		return cdcState{}, false, nil
+		return CDCState{}, false, nil
 	}
 	if err != nil {
-		return cdcState{}, false, fmt.Errorf("offset store load: %w", err)
+		return CDCState{}, false, fmt.Errorf("offset store load: %w", err)
 	}
 
-	var state cdcState
+	var state CDCState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return cdcState{}, false, fmt.Errorf("offset store unmarshal: %w", err)
+		return CDCState{}, false, fmt.Errorf("offset store unmarshal: %w", err)
 	}
 	return state, true, nil
 }
 
-func (s *PostgresOffsetStore) Save(ctx context.Context, state cdcState) error {
+func (s *PostgresOffsetStore) Save(ctx context.Context, state CDCState) error {
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("offset store marshal: %w", err)

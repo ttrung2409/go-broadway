@@ -122,7 +122,7 @@ func (f *fixture) offsetStore(t *testing.T) *PostgresOffsetStore {
 	return store
 }
 
-func (f *fixture) newConnector(chunkSize int, store OffsetStore) *PostgresConnector {
+func (f *fixture) newConnector(chunkSize int, store OffsetStore[CDCState]) *PostgresConnector {
 	return New(Config{
 		ConnectionString: f.dsn,
 		SlotName:         f.slotName,
@@ -195,7 +195,7 @@ func collectN(t *testing.T, ch <-chan CDCEvent, n int) []CDCEvent {
 func eventIDs(events []CDCEvent) []int64 {
 	ids := make([]int64, len(events))
 	for i, e := range events {
-		ids[i] = e.PK.Value()
+		ids[i] = e.PK.Value().(int64)
 	}
 	return ids
 }
@@ -244,7 +244,7 @@ func TestIntegration_WALEvents(t *testing.T) {
 	assert.Equal(t, OperationUpdate, events[1].Operation)
 	assert.Equal(t, OperationDelete, events[2].Operation)
 	for _, e := range events {
-		assert.Equal(t, id, e.PK.Value())
+		assert.Equal(t, id, e.PK.Value().(int64))
 	}
 }
 
@@ -287,7 +287,7 @@ func TestIntegration_Concurrent_NoDuplicates(t *testing.T) {
 	seen := make(map[int64]int)
 	for _, e := range events {
 		if e.Operation == OperationRead || e.Operation == OperationInsert {
-			seen[e.PK.Value()]++
+			seen[e.PK.Value().(int64)]++
 		}
 	}
 
@@ -317,7 +317,7 @@ func TestIntegration_ResumeMidSnapshot(t *testing.T) {
 	assert.Equal(t, PhaseSnapshotting, state.Phase)
 	assert.True(t, state.SnapshotCursor.IsSet(), "snapshot cursor must be set")
 
-	savedCursor := state.SnapshotCursor.Value()
+	savedCursor := state.SnapshotCursor.Value().(int64)
 	assert.Greater(t, savedCursor, int64(0))
 
 	processor2 := newCollectingProcessor()
@@ -331,7 +331,7 @@ func TestIntegration_ResumeMidSnapshot(t *testing.T) {
 
 	for _, e := range events {
 		assert.Equal(t, OperationRead, e.Operation)
-		assert.Greater(t, e.PK.Value(), savedCursor,
+		assert.Greater(t, e.PK.Value().(int64), savedCursor,
 			"resumed connector must not re-deliver already-ACKed rows")
 	}
 }

@@ -14,16 +14,23 @@ import (
 
 // Config holds all configuration for a PostgresConnector.
 type Config struct {
+	// ConnectionString is the Postgres connection string, e.g. "postgres://user:pass@host/db".
 	ConnectionString string
-	SlotName         string
-	Publication      string
+	// SlotName is the logical replication slot name. Created automatically on first run.
+	SlotName string
+	// Publication is the Postgres publication name. Created automatically on first run.
+	Publication string
 	// Tables is a list of schema-qualified table names to capture, e.g. "public.orders".
 	// Tables are snapshotted sequentially in the order listed.
-	// All tables must have a single-column integer primary key named "id".
-	Tables      []string
-	ChunkSize   int         // rows per snapshot chunk (default: 1000)
-	BufferSize  int         // internal event buffer capacity (default: 10000)
-	OffsetStore OffsetStore // persists CDC offsets across restarts; defaults to PostgresOffsetStore backed by the source database
+	// All captured tables must have a single-column primary key named "id" (bigint or uuid).
+	Tables []string
+	// ChunkSize is the number of rows per snapshot chunk (default: 1000).
+	ChunkSize int
+	// BufferSize is the internal event buffer capacity between the connector and the pipeline (default: 10000).
+	BufferSize int
+	// OffsetStore persists CDC state (snapshot cursor, confirmed WAL LSN) across restarts,
+	// enabling crash-safe resume. Defaults to PostgresOffsetStore backed by the source database.
+	OffsetStore OffsetStore[CDCState]
 }
 
 func (c *Config) chunkSizeOrDefault() int {
@@ -47,20 +54,20 @@ type cdcEngine struct {
 
 	merger      *merger
 	streamer    *walStreamer
-	offsetStore OffsetStore
+	offsetStore OffsetStore[CDCState]
 	conn        *pgx.Conn
-	state       cdcState
+	state       CDCState
 
-	chunkSizes  map[int]int   // chunkID → expected ACK count
-	chunkAcked  map[int]int   // chunkID → received ACK count
-	chunkHighPK map[int]int64 // chunkID → high PK of the chunk
+	chunkSizes  map[int]int // chunkID → expected ACK count
+	chunkAcked  map[int]int // chunkID → received ACK count
+	chunkHighPK map[int]PK  // chunkID → high PK of the chunk
 }
 
 func newCDCEngine() *cdcEngine {
 	return &cdcEngine{
 		chunkSizes:  make(map[int]int),
 		chunkAcked:  make(map[int]int),
-		chunkHighPK: make(map[int]int64),
+		chunkHighPK: make(map[int]PK),
 	}
 }
 
@@ -113,7 +120,7 @@ func (c *PostgresConnector) HandleDemand(
 			if event.Operation == OperationRead {
 				e.mu.Lock()
 				e.chunkSizes[event.chunkID]++
-				e.chunkHighPK[event.chunkID] = event.PK.Value()
+				e.chunkHighPK[event.chunkID] = event.PK
 				e.mu.Unlock()
 			}
 		default:
@@ -163,8 +170,8 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		for chunkID, count := range chunkACKs {
 			e.chunkAcked[chunkID] += count
 			if e.chunkAcked[chunkID] >= e.chunkSizes[chunkID] && e.chunkSizes[chunkID] > 0 {
-				if pkHigh := e.chunkHighPK[chunkID]; pkHigh != 0 {
-					e.state.SnapshotCursor = pkAt(pkHigh)
+				if pkHigh := e.chunkHighPK[chunkID]; pkHigh.IsSet() {
+					e.state.SnapshotCursor = pkHigh
 				}
 				delete(e.chunkSizes, chunkID)
 				delete(e.chunkAcked, chunkID)
@@ -201,17 +208,17 @@ func (c *PostgresConnector) start(ctx context.Context) {
 		panic(fmt.Sprintf("load state: %v", err))
 	}
 	if !found {
-		state = cdcState{
+		state = CDCState{
 			Phase:    PhaseSnapshotting,
 			SlotName: c.config.SlotName,
 		}
 	}
 
-	var savedRanges []pkRange
+	var savedRanges []PKRange
 	for _, r := range state.ScannedPKRanges {
 		savedRanges = append(
 			savedRanges,
-			pkRange{Table: r.Table, Low: r.Low, High: r.High, XMin: r.XMin},
+			PKRange{Table: r.Table, Low: r.Low, High: r.High, XMin: r.XMin},
 		)
 	}
 
@@ -253,7 +260,7 @@ func (c *PostgresConnector) start(ctx context.Context) {
 	e.streamer = streamer
 	e.chunkSizes = make(map[int]int)
 	e.chunkAcked = make(map[int]int)
-	e.chunkHighPK = make(map[int]int64)
+	e.chunkHighPK = make(map[int]PK)
 	e.mu.Unlock()
 
 	go func() {
@@ -278,7 +285,7 @@ func (c *PostgresConnector) start(ctx context.Context) {
 // runSnapshot scans all tables sequentially, resuming from the saved state.
 // State persistence is handled solely by the Acknowledger; this function only
 // drives the scanner and signals the merger.
-func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, state cdcState) {
+func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, state CDCState) {
 	e := c.engine
 	tables := c.config.Tables
 	chunkID := 1
@@ -307,7 +314,7 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		chunkID += c.config.chunkSizeOrDefault() // rough offset to keep chunk IDs unique across tables
 	}
 
-	// switch merger to pass-through; phase/cursor state is owned by the Acknowledger
+	// switch merger to pass-through
 	e.merger.onSnapshotComplete()
 }
 
