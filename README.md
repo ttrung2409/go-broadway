@@ -253,36 +253,6 @@ type BatcherConfig struct {
 }
 ```
 
-## Usage Considerations
-- **Concurrency Settings**: Adjust based on workload and available resources
-- **Batch Sizing**: Balance between throughput (larger batches) and latency (smaller batches)
-- **Partition Keys**: Choose keys that distribute load evenly
-- **Error Handling**: Implement custom acknowledgers for special failure cases
-
-## Real-World Example
-
-Check out the [examples](./examples) directory for a complete example of processing user activity events:
-
-```go
-// See examples/main.go for the full implementation
-```
-
-## Testing
-
-The library includes tests demonstrating various scenarios:
-
-- Basic processing: [basic_test.go](./test/basic_test.go)
-- Batching: [batching_test.go](./test/batching_test.go)
-- Fault tolerance: [fault_tolerance_test.go](./test/fault_tolerance_test.go)
-- Graceful shutdown: [graceful_shutdown_test.go](./test/graceful_shutdown_test.go)
-- Partitioning: [partitioning_test.go](./test/partitioning_test.go)
-
-To run the tests:
-
-```bash
-go test ./test/... -v -race
-```
-
 ## Connectors
 
 A `Connector` is a `Producer` that streams data from an external source into the Broadway pipeline.
@@ -320,6 +290,36 @@ pipeline := broadway.NewPipeline(broadway.PipelineConfig{
     },
     // Acknowledger is auto-wired from the connector
 })
+```
+
+## Usage Considerations
+- **Concurrency Settings**: Adjust based on workload and available resources
+- **Batch Sizing**: Balance between throughput (larger batches) and latency (smaller batches)
+- **Partition Keys**: Choose keys that distribute load evenly
+- **Error Handling**: Implement custom acknowledgers for special failure cases
+
+## Real-World Example
+
+Check out the [examples](./examples) directory for a complete example of processing user activity events:
+
+```go
+// See examples/main.go for the full implementation
+```
+
+## Testing
+
+The library includes tests demonstrating various scenarios:
+
+- Basic processing: [basic_test.go](./test/basic_test.go)
+- Batching: [batching_test.go](./test/batching_test.go)
+- Fault tolerance: [fault_tolerance_test.go](./test/fault_tolerance_test.go)
+- Graceful shutdown: [graceful_shutdown_test.go](./test/graceful_shutdown_test.go)
+- Partitioning: [partitioning_test.go](./test/partitioning_test.go)
+
+To run the tests:
+
+```bash
+go test ./test/... -v -race
 ```
 
 ## License

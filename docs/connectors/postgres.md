@@ -55,9 +55,6 @@ connector := pg.New(pg.Config{
     OffsetStore: &MyOffsetStore{},
 })
 ```
-
-`Load` is called once on startup to resume from the last saved position. `Save` is called after every acknowledged batch — keep it fast and idempotent.
-
 ---
 
 ## Configuration reference
