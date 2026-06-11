@@ -98,18 +98,19 @@ type MyProducer struct {
 	// state variables
 }
 
-// Clone creates a new instance of MyProducer for concurrent processing
+// Init is called once when the pipeline starts. Use it for one-time setup
+// that requires a context, such as opening connections.
+func (p *MyProducer) Init(ctx context.Context) {}
+
+// Clone creates a new instance of MyProducer for concurrent processing.
 func (p *MyProducer) Clone() broadway.Producer {
 	return &MyProducer{}
 }
 
-// HandleDemand fetches or generates messages based on demand
+// HandleDemand fetches or generates messages based on demand.
 func (p *MyProducer) HandleDemand(demand int, ctx context.Context) []broadway.MessagePayload {
-	// Fetch or generate messages up to the demand
 	payloads := make([]broadway.MessagePayload, 0, demand)
-	
-	// Add messages to payloads slice
-	
+	// fetch or generate up to demand messages
 	return payloads
 }
 ```
@@ -280,6 +281,45 @@ To run the tests:
 
 ```bash
 go test ./test/... -v -race
+```
+
+## Connectors
+
+A `Connector` is a `Producer` that streams data from an external source into the Broadway pipeline.
+
+Each connector is optionally paired with an Acknowledger that can be used to track the message offset and provide at-least-once delivery guarantee for the source.
+
+#### Built-in Connectors
+
+##### [PostgresConnector](./docs/connectors/postgres.md)
+
+Postgres CDC via WAL logical replication (`pg` package).
+
+```go
+connector := pg.New(pg.Config{
+    ConnectionString: "postgres://user:pass@host/db",
+    SlotName:         "broadway_cdc",
+    Publication:      "broadway_pub",
+    Tables:           []string{"public.orders", "public.users"},
+})
+
+pipeline := broadway.NewPipeline(broadway.PipelineConfig{
+    Producer: broadway.ProducerConfig{
+        Producer:    connector,
+        Concurrency: 1, // must be 1; WAL is a single sequential stream
+    },
+    MessageProcessor: broadway.MessageProcessorConfig{
+        Processor:   &MyCDCProcessor{},
+        Concurrency: 4,
+        MinDemand:   10,
+        MaxDemand:   100,
+    },
+    PartitionBy: func(payload broadway.MessagePayload) string {
+        event := payload.(pg.CDCEvent)
+        return fmt.Sprintf("%s.%d", event.Table, event.PK.Value())
+    },
+    // Acknowledger is auto-wired from the connector
+})
 ```
 
 ## License
