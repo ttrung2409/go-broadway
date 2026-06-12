@@ -34,7 +34,7 @@ type Pipeline struct {
 	config         PipelineConfig
 	terminated     atomic.Bool
 	producerIdleCh chan bool
-	terminatedCh   chan bool
+	terminatedCh   chan struct{}
 }
 
 // NewPipeline creates a new Broadway pipeline with the given configuration.
@@ -52,7 +52,7 @@ func NewPipeline(config PipelineConfig) *Pipeline {
 	return &Pipeline{
 		config:         config,
 		producerIdleCh: make(chan bool, 1),
-		terminatedCh:   make(chan bool, 1),
+		terminatedCh:   make(chan struct{}, 1),
 	}
 }
 
@@ -129,7 +129,6 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 func (p *Pipeline) terminate() {
 	p.terminated.Store(true)
-	p.terminatedCh <- true
 	close(p.terminatedCh)
 }
 
@@ -137,6 +136,6 @@ func (p *Pipeline) ProducerIdle() <-chan bool {
 	return p.producerIdleCh
 }
 
-func (p *Pipeline) Terminated() <-chan bool {
+func (p *Pipeline) Terminated() <-chan struct{} {
 	return p.terminatedCh
 }

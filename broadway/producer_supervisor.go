@@ -15,7 +15,7 @@ type producerSupervisor struct {
 	_messageAck               Acknowledger
 	_producersChangeCh        chan map[string]*producer
 	_allProducersIdleCh       chan bool
-	_allProducersTerminatedCh chan bool
+	_allProducersTerminatedCh chan struct{}
 	_terminatedOnce           sync.Once
 }
 
@@ -31,7 +31,7 @@ func newProducerSupervisor(
 		_messageAck:               messageAck,
 		_producersChangeCh:        make(chan map[string]*producer),
 		_allProducersIdleCh:       make(chan bool, 1),
-		_allProducersTerminatedCh: make(chan bool, 1),
+		_allProducersTerminatedCh: make(chan struct{}, 1),
 	}
 }
 
@@ -137,7 +137,7 @@ func (s *producerSupervisor) checkIfAllProducersTerminated() {
 
 	if allTerminated {
 		s._terminatedOnce.Do(func() {
-			s._allProducersTerminatedCh <- true
+			close(s._allProducersTerminatedCh)
 		})
 	}
 }
@@ -150,6 +150,6 @@ func (s *producerSupervisor) producersChanged() <-chan map[string]*producer {
 	return s._producersChangeCh
 }
 
-func (s *producerSupervisor) allProducersTerminated() <-chan bool {
+func (s *producerSupervisor) allProducersTerminated() <-chan struct{} {
 	return s._allProducersTerminatedCh
 }

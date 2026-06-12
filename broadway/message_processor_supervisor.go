@@ -12,7 +12,7 @@ type messageProcessorSupervisor struct {
 
 	_hr                        *hashRing[*messageProcessor]
 	_mu                        sync.Mutex
-	_allProcessorsTerminatedCh chan bool
+	_allProcessorsTerminatedCh chan struct{}
 	_terminatedOnce            sync.Once
 	_producers                 *concurrentMap[string, *producer]
 	_batchers                  *concurrentMap[string, *batcher]
@@ -28,7 +28,7 @@ func newMessageProcessorSupervisor(
 
 		_hr:                        newHashRing[*messageProcessor](),
 		_mu:                        sync.Mutex{},
-		_allProcessorsTerminatedCh: make(chan bool, 1),
+		_allProcessorsTerminatedCh: make(chan struct{}, 1),
 		_producers:                 newConcurrentMap(producers),
 		_batchers:                  newConcurrentMap(batchers),
 	}
@@ -152,7 +152,7 @@ func (s *messageProcessorSupervisor) resolve(partitionKey string) (string, bool)
 	return "", false
 }
 
-func (s *messageProcessorSupervisor) allProcessorsTerminated() <-chan bool {
+func (s *messageProcessorSupervisor) allProcessorsTerminated() <-chan struct{} {
 	return s._allProcessorsTerminatedCh
 }
 
@@ -170,7 +170,7 @@ func (s *messageProcessorSupervisor) checkIfAllProcessorsTerminated() {
 
 	if allTerminated {
 		s._terminatedOnce.Do(func() {
-			s._allProcessorsTerminatedCh <- true
+			close(s._allProcessorsTerminatedCh)
 		})
 	}
 }

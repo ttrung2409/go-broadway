@@ -41,7 +41,7 @@ type batcher struct {
 	_receiver        chan []*Message
 	_terminated         atomic.Bool
 	_fullyTerminated    atomic.Bool
-	_processBatchesDone chan bool
+	_processBatchesDone chan struct{}
 	_mu                 sync.Mutex
 	_terminatedCh       chan any
 }
@@ -64,7 +64,7 @@ func newBatcher(config BatcherConfig) *batcher {
 		_batches:            newConcurrentMap[string, *concurrentQueue[*Message]](),
 		_hr:                 newHashRing[*batchProcessor](),
 		_receiver:           make(chan []*Message),
-		_processBatchesDone: make(chan bool),
+		_processBatchesDone: make(chan struct{}),
 		_mu:                 sync.Mutex{},
 		_terminatedCh:       make(chan any),
 	}

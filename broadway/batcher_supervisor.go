@@ -12,7 +12,7 @@ type batcherSupervisor struct {
 
 	_batchers                *concurrentMap[string, *batcher]
 	_mu                      sync.Mutex
-	_allBatchersTerminatedCh chan bool
+	_allBatchersTerminatedCh chan struct{}
 	_terminatedOnce          sync.Once
 }
 
@@ -22,7 +22,7 @@ func newBatcherSupervisor(config []BatcherConfig) *batcherSupervisor {
 
 		_batchers:                newConcurrentMap[string, *batcher](),
 		_mu:                      sync.Mutex{},
-		_allBatchersTerminatedCh: make(chan bool, 1),
+		_allBatchersTerminatedCh: make(chan struct{}, 1),
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *batcherSupervisor) terminate() {
 
 }
 
-func (s *batcherSupervisor) allBatchersTerminated() <-chan bool {
+func (s *batcherSupervisor) allBatchersTerminated() <-chan struct{} {
 	return s._allBatchersTerminatedCh
 }
 
@@ -82,7 +82,7 @@ func (s *batcherSupervisor) checkIfAllBatchersTerminated() {
 
 	if allTerminated {
 		s._terminatedOnce.Do(func() {
-			s._allBatchersTerminatedCh <- true
+			close(s._allBatchersTerminatedCh)
 		})
 	}
 }
