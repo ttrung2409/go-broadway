@@ -2,8 +2,6 @@
 
 `PostgresConnector` (package `pg`) captures a Postgres database as a CDC stream. It first snapshots all existing rows in ascending PK order, then switches to streaming live changes via WAL logical replication — delivering every change at least once with crash-safe resume.
 
----
-
 ## Prerequisites
 
 ```sql
@@ -11,8 +9,6 @@ wal_level = logical
 ```
 
 The connector creates the replication slot and publication automatically on first run. All captured tables must have a single-column primary key named `id`. Both `bigint`/`bigserial` and `uuid` column types are supported.
-
----
 
 ## How it works
 
@@ -27,7 +23,6 @@ The connector operates in two sequential phases: **snapshotting** and **streamin
       WS --> MG
       MG --> PL[Pipeline]
 ```
----
 
 ### Incremental snapshotting
 
@@ -42,8 +37,6 @@ Each table is read in fixed-size windows of `ChunkSize` rows ordered by ascendin
 The snapshot cursor (`CDCState.SnapshotCursor`) holds the highest acknowledged PK. On restart, the scanner skips rows with `id <= SnapshotCursor` and resumes from the next row. Chunks that were in progress but not yet fully acknowledged are re-scanned from scratch — downstream may therefore see the same rows again, which is expected under the at-least-once guarantee.
 
 `CDCState.SnapshotTable` tracks which table was being scanned, so already-completed tables are not revisited.
-
----
 
 ### Streaming mode
 
@@ -60,8 +53,6 @@ Events within a single Postgres transaction are accumulated in a buffer and forw
 Every 10 seconds the streamer sends a `StandbyStatusUpdate` to Postgres reporting the highest confirmed LSN. Postgres uses this to advance the replication slot's `confirmed_flush_lsn`, which allows it to reclaim WAL segments that are no longer needed. If the pipeline is shut down without advancing the LSN for an extended period, Postgres will accumulate WAL on disk until the slot is caught up or dropped.
 
 On restart in streaming mode the streamer resumes from `CDCState.ConfirmedLSN`, so no events are skipped.
-
----
 
 ### Overlap and deduplication (the merger)
 
@@ -81,8 +72,6 @@ For rows in already-completed chunks, the merger holds a `scannedRanges` list an
 For rows not yet reached by the snapshot, WAL events are discarded: the snapshot will read and emit the row's current state when it gets there.
 
 When the snapshot completes (`onSnapshotComplete`), any remaining overflow events (rows beyond the last scanned row) are flushed and the merger switches to pass-through mode for all subsequent WAL events.
-
----
 
 ## Handling CDC events
 
@@ -111,8 +100,6 @@ func (p *MyCDCProcessor) Handle(msg *broadway.Message, ctx context.Context) (*br
 }
 ```
 
----
-
 ## Offset store
 
 Offsets are persisted after every acknowledged batch. On restart the connector resumes from the last confirmed position — snapshot chunks that were not fully acknowledged are re-scanned, and WAL re-delivers from the last confirmed LSN.
@@ -125,7 +112,6 @@ connector := pg.New(pg.Config{
     OffsetStore: &MyOffsetStore{},
 })
 ```
----
 
 ## Configuration reference
 
