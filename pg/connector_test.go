@@ -93,7 +93,10 @@ func newFixture(t *testing.T) *fixture {
 				`(SELECT 1 FROM pg_replication_slots WHERE slot_name='%s')`,
 			f.slotName, f.slotName,
 		))
-		_, _ = conn.Exec(bg, fmt.Sprintf(`DROP PUBLICATION IF EXISTS %s`, pgQuoteIdent(f.publication)))
+		_, _ = conn.Exec(
+			bg,
+			fmt.Sprintf(`DROP PUBLICATION IF EXISTS %s`, pgQuoteIdent(f.publication)),
+		)
 		_ = conn.Close(bg)
 	})
 
@@ -122,13 +125,17 @@ func (f *fixture) offsetStore(t *testing.T) *PostgresOffsetStore {
 	return store
 }
 
-func (f *fixture) newConnector(chunkSize int, store OffsetStore[CDCState]) *PostgresConnector {
+func (f *fixture) newConnector(
+	chunkSize int,
+	store OffsetStore[CDCState],
+) *PostgresConnector {
 	return New(Config{
 		ConnectionString: f.dsn,
 		SlotName:         f.slotName,
 		Publication:      f.publication,
 		Tables:           []string{f.table},
 		ChunkSize:        chunkSize,
+		BufferSize:       chunkSize,
 		OffsetStore:      store,
 	})
 }
@@ -336,7 +343,7 @@ func TestIntegration_ResumeMidSnapshot(t *testing.T) {
 	}
 }
 
-func TestIntegration_AtLeastOnce_RedeliveryWithoutACK(t *testing.T) {
+func TestIntegration_AtLeastOnce(t *testing.T) {
 	f := newFixture(t)
 	store := f.offsetStore(t)
 	ids := f.insert(t, 5)

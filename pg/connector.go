@@ -347,6 +347,7 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 			if ctx.Err() == nil {
 				fmt.Printf("snapshot error for %s: %v\n", table, err)
 			}
+
 			return
 		}
 
@@ -358,9 +359,6 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 
 	e.mu.Lock()
 	e.state.Phase = PhaseStreaming
-	if e.offsetStore != nil {
-		_ = e.offsetStore.Save(context.Background(), e.state)
-	}
 	e.mu.Unlock()
 }
 
