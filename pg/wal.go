@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pglogrepl"
@@ -254,12 +255,48 @@ func decodeTuple(rel *pglogrepl.RelationMessageV2, tuple *pglogrepl.TupleData) R
 		case 'n':
 			row[col.Name] = nil
 		case 't':
-			row[col.Name] = string(tc.Data)
+			row[col.Name] = decodeText(string(tc.Data), col.DataType)
 		case 'u':
 			// unchanged TOAST — omit
 		}
 	}
 	return row
+}
+
+// decodeText converts the Postgres text representation of a value to the
+// appropriate Go type based on the column OID.
+func decodeText(s string, oid uint32) any {
+	switch oid {
+	case 16: // bool
+		return s == "t" || s == "true" || s == "TRUE"
+	case 20, 21, 23, 26: // int8, int2, int4, oid
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return v
+		}
+	case 700, 701: // float4, float8
+		if v, err := strconv.ParseFloat(s, 64); err == nil {
+			return v
+		}
+	case 1700: // numeric
+		if v, err := strconv.ParseFloat(s, 64); err == nil {
+			return v
+		}
+	case 1082, 1114: // date, timestamp
+		if v, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+			return v
+		}
+		if v, err := time.Parse("2006-01-02", s); err == nil {
+			return v
+		}
+	case 1184: // timestamptz
+		if v, err := time.Parse("2006-01-02 15:04:05.999999999-07", s); err == nil {
+			return v
+		}
+		if v, err := time.Parse("2006-01-02 15:04:05-07", s); err == nil {
+			return v
+		}
+	}
+	return s
 }
 
 // extractPKFromRelation returns the PK for the row using the replica identity columns.
