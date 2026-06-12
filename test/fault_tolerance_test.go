@@ -68,10 +68,10 @@ func (p *faultToleranceTestProducer) HandleDemand(
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			broadway.NewMessage(&faultToleranceTestMessage{
+			broadway.NewMessage(faultToleranceTestMessage{
 				UserId: userIds[producedCount%faultToleranceTestTotalUsers],
 				Order:  producedCount,
-			}),
+			}, nil),
 		)
 
 		producedCount++
@@ -225,11 +225,11 @@ func TestMessageProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespi
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*faultToleranceTestMessage)
+			payload := message.Payload.(faultToleranceTestMessage)
 			partitionKey := payload.UserId
 
 			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
-				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				lastOrder := lastMessage.Payload.(faultToleranceTestMessage).Order
 				currentOrder := payload.Order
 
 				assert.Less(
@@ -259,7 +259,7 @@ func TestMessageProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespi
 			MaxDemand:   10,
 		},
 		PartitionBy: func(payload broadway.MessagePayload) string {
-			return payload.(*faultToleranceTestMessage).UserId
+			return payload.(faultToleranceTestMessage).UserId
 		},
 		Acknowledger: acknowledger,
 	})
@@ -340,11 +340,11 @@ func TestBatchProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespite
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*faultToleranceTestMessage)
+			payload := message.Payload.(faultToleranceTestMessage)
 			partitionKey := payload.UserId
 
 			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
-				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				lastOrder := lastMessage.Payload.(faultToleranceTestMessage).Order
 				currentOrder := payload.Order
 
 				assert.Less(
@@ -382,7 +382,7 @@ func TestBatchProcessorFaultTolerance_PartitionedMessagesProcessedInOrderDespite
 			},
 		},
 		PartitionBy: func(payload broadway.MessagePayload) string {
-			return payload.(*faultToleranceTestMessage).UserId
+			return payload.(faultToleranceTestMessage).UserId
 		},
 		Acknowledger: acknowledger,
 	})
@@ -463,11 +463,11 @@ func TestPipelineFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailur
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*faultToleranceTestMessage)
+			payload := message.Payload.(faultToleranceTestMessage)
 			partitionKey := payload.UserId
 
 			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
-				lastOrder := lastMessage.Payload.(*faultToleranceTestMessage).Order
+				lastOrder := lastMessage.Payload.(faultToleranceTestMessage).Order
 				currentOrder := payload.Order
 
 				assert.Less(
@@ -505,7 +505,7 @@ func TestPipelineFaultTolerance_PartitionedMessagesProcessedInOrderDespiteFailur
 			},
 		},
 		PartitionBy: func(payload broadway.MessagePayload) string {
-			return payload.(*faultToleranceTestMessage).UserId
+			return payload.(faultToleranceTestMessage).UserId
 		},
 		Acknowledger: acknowledger,
 	})

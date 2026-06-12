@@ -123,9 +123,7 @@ func (c *PostgresConnector) HandleDemand(
 				e.mu.Unlock()
 			}
 
-			msg := broadway.NewMessage(event)
-			msg.Metadata = event // preserved for the Acknowledger
-			result = append(result, msg)
+			result = append(result, broadway.NewMessage(event, event))
 		default:
 			return result
 		}
@@ -147,7 +145,7 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		chunkACKs := make(map[int]int)
 
 		for _, msg := range messages {
-			event, ok := msg.Metadata.(CDCEvent)
+			event, ok := msg.Metadata().(CDCEvent)
 			if !ok {
 				continue
 			}
@@ -319,6 +317,13 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 
 	// switch merger to pass-through
 	e.merger.onSnapshotComplete()
+
+	e.mu.Lock()
+	e.state.Phase = PhaseStreaming
+	if e.offsetStore != nil {
+		_ = e.offsetStore.Save(context.Background(), e.state)
+	}
+	e.mu.Unlock()
 }
 
 // ensurePublication creates the publication if it does not already exist.

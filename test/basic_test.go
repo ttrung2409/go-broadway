@@ -60,7 +60,7 @@ func (p *basicTestProducer) HandleDemand(
 				Id:         fmt.Sprintf("message %d", p.producedCount),
 				UserId:     userIds[p.producedCount%basicTestTotalUsers],
 				ShouldFail: p.failedCount < p.totalFailed && failed,
-			}),
+			}, nil),
 		)
 
 		if p.failedCount < p.totalFailed && failed {

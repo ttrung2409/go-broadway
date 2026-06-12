@@ -55,12 +55,12 @@ func (p *batchingTestProducer) HandleDemand(
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			broadway.NewMessage(&batchingTestMessage{
+			broadway.NewMessage(batchingTestMessage{
 				UserId: userIds[p.count%batchingTestTotalUsers],
 				Action: actions[p.count%len(actions)],
 				Tenant: fmt.Sprintf("tenant %d", p.count%2),
 				Order:  p.count,
-			}),
+			}, nil),
 		)
 
 		p.count++
@@ -80,7 +80,7 @@ func (p *batchingTestMessageProcessor) Handle(
 	message *broadway.Message,
 	ctx context.Context,
 ) (*broadway.Message, error) {
-	message.BatchKey = message.Payload.(*batchingTestMessage).UserId
+	message.BatchKey = message.Payload.(batchingTestMessage).UserId
 
 	return message, nil
 }
@@ -100,7 +100,9 @@ func (p *batchingTestBatchProcessor) Handle(
 	ctx context.Context,
 ) ([]*broadway.Message, error) {
 	for _, message := range messages {
-		message.Payload.(*batchingTestMessage).HandledByBatchProcessorId = p.Id
+		payload := message.Payload.(batchingTestMessage)
+		payload.HandledByBatchProcessorId = p.Id
+		message.Payload = payload
 	}
 
 	return messages, nil
@@ -118,7 +120,7 @@ func TestMessagesWithSameBatchKeyRoutedToSameProcessor(t *testing.T) {
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*batchingTestMessage)
+			payload := message.Payload.(batchingTestMessage)
 			batchKey := payload.UserId
 			batchProcessorId := payload.HandledByBatchProcessorId
 
@@ -184,17 +186,17 @@ func TestMessagesWithSameBatchKeyProcessedInOrder(t *testing.T) {
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*batchingTestMessage)
+			payload := message.Payload.(batchingTestMessage)
 			batchKey := payload.UserId
 
 			if lastMessage, ok := lastProcessedMessageByBatchKey[batchKey]; ok {
 				assert.Less(
 					t,
-					lastMessage.Payload.(*batchingTestMessage).Order,
+					lastMessage.Payload.(batchingTestMessage).Order,
 					payload.Order,
 					"messages with batch key %s were processed out of order: %d before %d",
 					batchKey,
-					lastMessage.Payload.(*batchingTestMessage).Order,
+					lastMessage.Payload.(batchingTestMessage).Order,
 					payload.Order,
 				)
 			}
@@ -248,8 +250,8 @@ func (p *multiBatcherMessageProcessor) Handle(
 	message *broadway.Message,
 	ctx context.Context,
 ) (*broadway.Message, error) {
-	message.BatchKey = message.Payload.(*batchingTestMessage).UserId
-	message.Batcher = message.Payload.(*batchingTestMessage).Tenant
+	message.BatchKey = message.Payload.(batchingTestMessage).UserId
+	message.Batcher = message.Payload.(batchingTestMessage).Tenant
 
 	return message, nil
 }
@@ -267,9 +269,10 @@ func (p *multiBatcherBatchProcessor) Handle(
 	ctx context.Context,
 ) ([]*broadway.Message, error) {
 	for _, message := range messages {
-		payload := message.Payload.(*batchingTestMessage)
+		payload := message.Payload.(batchingTestMessage)
 		payload.HandledByBatchProcessorId = p.Id
 		payload.BatchedBy = ctx.Value(broadway.BatcherContextKey).(string)
+		message.Payload = payload
 	}
 
 	return messages, nil
@@ -289,11 +292,11 @@ func TestMultiBatcher_MessagesRoutedToSameBatcher(t *testing.T) {
 			assert.Equal(
 				t,
 				message.Batcher,
-				message.Payload.(*batchingTestMessage).BatchedBy,
+				message.Payload.(batchingTestMessage).BatchedBy,
 				"message of %s is supposed to be routed to batcher %s, but was routed to %s",
-				message.Payload.(*batchingTestMessage).Tenant,
+				message.Payload.(batchingTestMessage).Tenant,
 				message.Batcher,
-				message.Payload.(*batchingTestMessage).BatchedBy,
+				message.Payload.(batchingTestMessage).BatchedBy,
 			)
 		}
 	}

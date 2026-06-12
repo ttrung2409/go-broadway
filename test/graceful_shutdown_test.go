@@ -37,7 +37,7 @@ func (p *gracefulShutdownTestProducer) HandleDemand(
 	}
 
 	for i := 0; i < gracefulShutdownTestTotalMessages*5; i++ {
-		result = append(result, broadway.NewMessage(gracefulShutdownTestMessage{}))
+		result = append(result, broadway.NewMessage(gracefulShutdownTestMessage{}, nil))
 	}
 
 	p.producedCount += gracefulShutdownTestTotalMessages * 5

@@ -64,7 +64,7 @@ func (p *ActivityProducer) HandleDemand(demand int, ctx context.Context) []*broa
 			}
 		}
 
-		result = append(result, broadway.NewMessage(activity))
+		result = append(result, broadway.NewMessage(activity, nil))
 	}
 
 	return result

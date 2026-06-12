@@ -52,11 +52,11 @@ func (p *partitioningTestProducer) HandleDemand(
 	for i := 0; i < demand; i++ {
 		result = append(
 			result,
-			broadway.NewMessage(&partitioningTestMessage{
+			broadway.NewMessage(partitioningTestMessage{
 				UserId: userIds[p.count%partitioningTestTotalUsers],
 				Action: actions[p.count%len(actions)],
 				Order:  p.count,
-			}),
+			}, nil),
 		)
 
 		p.count++
@@ -77,7 +77,9 @@ func (p *partitioningTestMessageProcessor) Handle(
 	message *broadway.Message,
 	ctx context.Context,
 ) (*broadway.Message, error) {
-	message.Payload.(*partitioningTestMessage).HandledByMessageProcessorId = p.Id
+	payload := message.Payload.(partitioningTestMessage)
+	payload.HandledByMessageProcessorId = p.Id
+	message.Payload = payload
 
 	return message, nil
 }
@@ -97,7 +99,9 @@ func (p *partitioningTestBatchProcessor) Handle(
 	ctx context.Context,
 ) ([]*broadway.Message, error) {
 	for _, message := range messages {
-		message.Payload.(*partitioningTestMessage).HandledByBatchProcessorId = p.Id
+		payload := message.Payload.(partitioningTestMessage)
+		payload.HandledByBatchProcessorId = p.Id
+		message.Payload = payload
 	}
 
 	return messages, nil
@@ -116,7 +120,7 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*partitioningTestMessage)
+			payload := message.Payload.(partitioningTestMessage)
 			partitionKey := payload.UserId
 
 			if existingMessageProcessorId, ok := messageProcessorsByPartitionKey[partitionKey]; ok {
@@ -170,7 +174,7 @@ func TestMessagesWithSameParitionKeyRoutedToSameProcessors(t *testing.T) {
 			},
 		},
 		PartitionBy: func(payload broadway.MessagePayload) string {
-			return payload.(*partitioningTestMessage).UserId
+			return payload.(partitioningTestMessage).UserId
 		},
 		Acknowledger: acknowledger,
 	})
@@ -204,17 +208,17 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 		processedCount += len(messages)
 
 		for _, message := range messages {
-			payload := message.Payload.(*partitioningTestMessage)
+			payload := message.Payload.(partitioningTestMessage)
 			partitionKey := payload.UserId
 
 			if lastMessage, ok := lastProcessedMessageByPartitionKey[partitionKey]; ok {
 				assert.Less(
 					t,
-					lastMessage.Payload.(*partitioningTestMessage).Order,
+					lastMessage.Payload.(partitioningTestMessage).Order,
 					payload.Order,
 					"messages with partition key %s were processed out of order: %d before %d",
 					partitionKey,
-					lastMessage.Payload.(*partitioningTestMessage).Order,
+					lastMessage.Payload.(partitioningTestMessage).Order,
 					payload.Order)
 			}
 
@@ -242,7 +246,7 @@ func TestMessagesWithSamePartitionKeyProcessedInOrder(t *testing.T) {
 			},
 		},
 		PartitionBy: func(payload broadway.MessagePayload) string {
-			return payload.(*partitioningTestMessage).UserId
+			return payload.(partitioningTestMessage).UserId
 		},
 		Acknowledger: acknowledger,
 	})
