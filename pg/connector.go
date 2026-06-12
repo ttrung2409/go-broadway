@@ -62,6 +62,8 @@ type cdcEngine struct {
 	chunkAcked  map[int]int    // chunkID → received ACK count
 	chunkHighPK map[int]PK     // chunkID → high PK of the chunk
 	chunkTable  map[int]string // chunkID → schema-qualified table name
+
+	done chan struct{} // closed when the WAL streamer exits and the replication connection is released
 }
 
 func newCDCEngine() *cdcEngine {
@@ -70,6 +72,7 @@ func newCDCEngine() *cdcEngine {
 		chunkAcked:  make(map[int]int),
 		chunkHighPK: make(map[int]PK),
 		chunkTable:  make(map[int]string),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -103,10 +106,18 @@ func (c *PostgresConnector) Clone() broadway.Producer {
 }
 
 // HandleDemand drains up to demand events from the internal buffer.
+// When the context is cancelled it blocks until the WAL streamer has closed
+// the replication connection, so the pipeline only terminates after the slot
+// is released.
 func (c *PostgresConnector) HandleDemand(
 	demand int,
 	ctx context.Context,
 ) []*broadway.Message {
+
+	if ctx.Err() != nil {
+		<-c.engine.done
+		return nil
+	}
 
 	e := c.engine
 	result := make([]*broadway.Message, 0, demand)
@@ -272,9 +283,11 @@ func (c *PostgresConnector) start(ctx context.Context) {
 	e.chunkAcked = make(map[int]int)
 	e.chunkHighPK = make(map[int]PK)
 	e.chunkTable = make(map[int]string)
+	e.done = make(chan struct{})
 	e.mu.Unlock()
 
 	go func() {
+		defer close(e.done)
 		if err := streamer.run(ctx); err != nil && ctx.Err() == nil {
 			fmt.Printf("WAL streamer error: %v\n", err)
 		}
