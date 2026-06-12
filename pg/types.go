@@ -46,7 +46,7 @@ type CDCState struct {
 	Phase            Phase     `json:"phase"`
 	SlotName         string    `json:"slot_name"`
 	ConfirmedLSN     uint64    `json:"confirmed_lsn"`
-	SnapshotTableIdx int       `json:"snapshot_table_idx"`
+	SnapshotTable    string    `json:"snapshot_table"`
 	SnapshotCursor   PK        `json:"snapshot_cursor,omitempty"`
 	ScannedPKRanges  []PKRange `json:"scanned_pk_ranges,omitempty"`
 }

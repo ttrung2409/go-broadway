@@ -58,9 +58,10 @@ type cdcEngine struct {
 	conn        *pgx.Conn
 	state       CDCState
 
-	chunkSizes  map[int]int // chunkID → expected ACK count
-	chunkAcked  map[int]int // chunkID → received ACK count
-	chunkHighPK map[int]PK  // chunkID → high PK of the chunk
+	chunkSizes  map[int]int    // chunkID → expected ACK count
+	chunkAcked  map[int]int    // chunkID → received ACK count
+	chunkHighPK map[int]PK     // chunkID → high PK of the chunk
+	chunkTable  map[int]string // chunkID → schema-qualified table name
 }
 
 func newCDCEngine() *cdcEngine {
@@ -68,6 +69,7 @@ func newCDCEngine() *cdcEngine {
 		chunkSizes:  make(map[int]int),
 		chunkAcked:  make(map[int]int),
 		chunkHighPK: make(map[int]PK),
+		chunkTable:  make(map[int]string),
 	}
 }
 
@@ -117,9 +119,14 @@ func (c *PostgresConnector) HandleDemand(
 
 			// track chunk sizes for snapshot READ events
 			if event.Operation == OperationRead {
+				table := event.Table
+				if event.Schema != "" {
+					table = event.Schema + "." + event.Table
+				}
 				e.mu.Lock()
 				e.chunkSizes[event.chunkID]++
 				e.chunkHighPK[event.chunkID] = event.PK
+				e.chunkTable[event.chunkID] = table
 				e.mu.Unlock()
 			}
 
@@ -174,9 +181,11 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 				if pkHigh := e.chunkHighPK[chunkID]; pkHigh.IsSet() {
 					e.state.SnapshotCursor = pkHigh
 				}
+
 				delete(e.chunkSizes, chunkID)
 				delete(e.chunkAcked, chunkID)
 				delete(e.chunkHighPK, chunkID)
+				delete(e.chunkTable, chunkID)
 			}
 		}
 
@@ -262,6 +271,7 @@ func (c *PostgresConnector) start(ctx context.Context) {
 	e.chunkSizes = make(map[int]int)
 	e.chunkAcked = make(map[int]int)
 	e.chunkHighPK = make(map[int]PK)
+	e.chunkTable = make(map[int]string)
 	e.mu.Unlock()
 
 	go func() {
@@ -291,16 +301,31 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 	tables := c.config.Tables
 	chunkID := 1
 
-	for i := state.SnapshotTableIdx; i < len(tables); i++ {
+	startIdx := 0
+	for i, t := range tables {
+		if t == state.SnapshotTable {
+			startIdx = i
+			break
+		}
+	}
+
+	for i := startIdx; i < len(tables); i++ {
 		if ctx.Err() != nil {
 			return
 		}
 
 		table := tables[i]
 
+		e.mu.Lock()
+		if e.state.SnapshotTable != table {
+			e.state.SnapshotTable = table
+			e.state.SnapshotCursor = PK{}
+		}
+		e.mu.Unlock()
+
 		// resume cursor only for the table we were mid-scan on; fresh tables start unset
 		var cursor PK
-		if i == state.SnapshotTableIdx {
+		if i == startIdx {
 			cursor = state.SnapshotCursor
 		}
 
@@ -326,7 +351,8 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 	e.mu.Unlock()
 }
 
-// ensurePublication creates the publication if it does not already exist.
+// ensurePublication creates the publication if it does not exist, or alters it
+// to exactly match the configured table list if it already exists.
 func (c *PostgresConnector) ensurePublication(ctx context.Context, conn *pgx.Conn) error {
 	var exists bool
 	if err := conn.QueryRow(ctx,
@@ -335,12 +361,19 @@ func (c *PostgresConnector) ensurePublication(ctx context.Context, conn *pgx.Con
 	).Scan(&exists); err != nil {
 		return err
 	}
-	if exists {
-		return nil
-	}
 
 	tables := make([]string, len(c.config.Tables))
 	copy(tables, c.config.Tables)
+
+	if exists {
+		_, err := conn.Exec(ctx, fmt.Sprintf(
+			`ALTER PUBLICATION %s SET TABLE %s`,
+			pgQuoteIdent(c.config.Publication),
+			strings.Join(tables, ", "),
+		))
+		return err
+	}
+
 	_, err := conn.Exec(ctx, fmt.Sprintf(
 		`CREATE PUBLICATION %s FOR TABLE %s`,
 		pgQuoteIdent(c.config.Publication),
