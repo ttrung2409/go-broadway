@@ -26,7 +26,7 @@ type Config struct {
 	Tables []string
 	// ChunkSize is the number of rows per snapshot chunk (default: 1000).
 	ChunkSize int
-	// BufferSize is the internal event buffer capacity between the connector and the pipeline (default: 10000).
+	// BufferSize is the internal event buffer capacity between the connector and the pipeline (default: 1000).
 	BufferSize int
 	// OffsetStore persists CDC state (snapshot cursor, confirmed WAL LSN) across restarts,
 	// enabling crash-safe resume. Defaults to PostgresOffsetStore backed by the source database.
@@ -63,17 +63,28 @@ type cdcEngine struct {
 	chunkHighPK map[int]PK     // chunkID → high PK of the chunk
 	chunkTable  map[int]string // chunkID → schema-qualified table name
 
+	// watermark tracking: cursor only advances past a chunk once all lower-ID chunks are also ACKed
+	pendingChunks   map[int]struct{} // chunkIDs seen in HandleDemand but not yet fully ACKed
+	completedChunks map[int]PK       // chunkIDs fully ACKed → pkHigh (committed when no lower-ID chunk is pending)
+
+	// broadcast when both pendingChunks and completedChunks become empty
+	allChunksAcked *sync.Cond
+
 	done chan struct{} // closed when the WAL streamer exits and the replication connection is released
 }
 
 func newCDCEngine() *cdcEngine {
-	return &cdcEngine{
-		chunkSizes:  make(map[int]int),
-		chunkAcked:  make(map[int]int),
-		chunkHighPK: make(map[int]PK),
-		chunkTable:  make(map[int]string),
-		done:        make(chan struct{}),
+	e := &cdcEngine{
+		chunkSizes:      make(map[int]int),
+		chunkAcked:      make(map[int]int),
+		chunkHighPK:     make(map[int]PK),
+		chunkTable:      make(map[int]string),
+		pendingChunks:   make(map[int]struct{}),
+		completedChunks: make(map[int]PK),
+		done:            make(chan struct{}),
 	}
+	e.allChunksAcked = sync.NewCond(&e.mu)
+	return e
 }
 
 // PostgresConnector captures all existing rows via incremental snapshotting
@@ -138,6 +149,8 @@ func (c *PostgresConnector) HandleDemand(
 				e.chunkSizes[event.chunkID]++
 				e.chunkHighPK[event.chunkID] = event.PK
 				e.chunkTable[event.chunkID] = table
+				e.pendingChunks[event.chunkID] = struct{}{}
+
 				e.mu.Unlock()
 			}
 
@@ -186,23 +199,63 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		}
 
 		// advance snapshot cursor when all messages in a chunk are ACKed
+		advanced := false
 		for chunkID, count := range chunkACKs {
 			e.chunkAcked[chunkID] += count
-			if e.chunkAcked[chunkID] >= e.chunkSizes[chunkID] && e.chunkSizes[chunkID] > 0 {
-				if pkHigh := e.chunkHighPK[chunkID]; pkHigh.IsSet() {
-					e.state.SnapshotCursor = pkHigh
-				}
-
+			if e.chunkAcked[chunkID] >= e.chunkSizes[chunkID] {
+				e.completedChunks[chunkID] = e.chunkHighPK[chunkID]
+				delete(e.pendingChunks, chunkID)
 				delete(e.chunkSizes, chunkID)
 				delete(e.chunkAcked, chunkID)
 				delete(e.chunkHighPK, chunkID)
 				delete(e.chunkTable, chunkID)
+				advanced = true
 			}
+		}
+		if advanced {
+			e.advanceSnapshotCursor()
 		}
 
 		if e.offsetStore != nil {
 			_ = e.offsetStore.Save(context.Background(), e.state)
 		}
+	}
+}
+
+// advanceSnapshotCursor recomputes the watermark and updates state.SnapshotCursor
+// to the highest safe position.
+//
+// The cursor may only advance to chunk k's pkHigh when every chunk with a lower
+// ID has also been fully ACKed — otherwise a crash would leave a gap in delivery.
+// completedChunks holds fully-ACKed chunks awaiting commitment; pendingChunks holds
+// chunks still in flight. The watermark is the highest-ID completed chunk that has
+// no pending predecessor.
+func (e *cdcEngine) advanceSnapshotCursor() {
+	minPending := int(^uint(0) >> 1) // math.MaxInt without importing math
+	for id := range e.pendingChunks {
+		if id < minPending {
+			minPending = id
+		}
+	}
+
+	watermarkID := -1
+	for id := range e.completedChunks {
+		if id < minPending && id > watermarkID {
+			watermarkID = id
+		}
+	}
+
+	if watermarkID >= 0 {
+		e.state.SnapshotCursor = e.completedChunks[watermarkID]
+		for id := range e.completedChunks {
+			if id <= watermarkID {
+				delete(e.completedChunks, id)
+			}
+		}
+	}
+
+	if len(e.pendingChunks) == 0 && len(e.completedChunks) == 0 {
+		e.allChunksAcked.Broadcast()
 	}
 }
 
@@ -283,6 +336,8 @@ func (c *PostgresConnector) start(ctx context.Context) {
 	e.chunkAcked = make(map[int]int)
 	e.chunkHighPK = make(map[int]PK)
 	e.chunkTable = make(map[int]string)
+	e.pendingChunks = make(map[int]struct{})
+	e.completedChunks = make(map[int]PK)
 	e.done = make(chan struct{})
 	e.mu.Unlock()
 
@@ -354,7 +409,22 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		chunkID += c.config.chunkSizeOrDefault() // rough offset to keep chunk IDs unique across tables
 	}
 
-	// switch merger to pass-through
+	// Block until every emitted snapshot chunk has been acknowledged. This ensures that
+	// PhaseStreaming is never persisted before all snapshot rows are safely processed:
+	// a restart would skip the snapshot, so pre-existing rows not in WAL would be lost.
+	go func() {
+		<-ctx.Done()
+		e.allChunksAcked.Broadcast() // unblock the wait below on cancellation
+	}()
+	e.mu.Lock()
+	for (len(e.pendingChunks) > 0 || len(e.completedChunks) > 0) && ctx.Err() == nil {
+		e.allChunksAcked.Wait()
+	}
+	e.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+
 	e.merger.onSnapshotComplete()
 
 	e.mu.Lock()

@@ -343,6 +343,69 @@ func TestIntegration_ResumeMidSnapshot(t *testing.T) {
 	}
 }
 
+func TestIntegration_ResumeMidSnapshot_ConcurrentProcessors(t *testing.T) {
+	f := newFixture(t)
+	f.insert(t, 50)
+	store := f.offsetStore(t)
+
+	newConnector := func() *PostgresConnector {
+		return New(Config{
+			ConnectionString: f.dsn,
+			SlotName:         f.slotName,
+			Publication:      f.publication,
+			Tables:           []string{f.table},
+			ChunkSize:        10,
+			BufferSize:       10,
+			OffsetStore:      store,
+		})
+	}
+
+	// Pipeline1: two concurrent processors, cancel after 20 events (2 chunks).
+	processor1 := newCollectingProcessor()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+
+	p1 := broadway.NewPipeline(broadway.PipelineConfig{
+		Producer: broadway.ProducerConfig{Producer: newConnector(), Concurrency: 1},
+		MessageProcessor: broadway.MessageProcessorConfig{
+			Processor:   processor1,
+			Concurrency: 2,
+			MinDemand:   1,
+			MaxDemand:   10,
+		},
+	})
+	p1.Run(ctx1)
+
+	collectN(t, processor1.ch, 20)
+	time.Sleep(200 * time.Millisecond)
+	cancel1()
+	<-p1.Terminated()
+
+	state, found, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, PhaseSnapshotting, state.Phase, "snapshot must not have completed")
+	require.True(t, state.SnapshotCursor.IsSet())
+
+	savedCursor := state.SnapshotCursor.Value().(int64)
+	require.Greater(t, savedCursor, int64(0))
+
+	// Pipeline2: resume and collect remaining rows; verify no gap and no re-delivery.
+	processor2 := newCollectingProcessor()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+
+	pipeline2 := startPipeline(ctx2, newConnector(), processor2)
+	remaining := 50 - int(savedCursor)
+	events := collectN(t, processor2.ch, remaining)
+	cancel2()
+	<-pipeline2.Terminated()
+
+	for _, e := range events {
+		assert.Equal(t, OperationRead, e.Operation)
+		assert.Greater(t, e.PK.Value().(int64), savedCursor,
+			"resumed connector must not re-deliver already-ACKed rows")
+	}
+}
+
 func TestIntegration_AtLeastOnce(t *testing.T) {
 	f := newFixture(t)
 	store := f.offsetStore(t)
