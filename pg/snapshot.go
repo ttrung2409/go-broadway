@@ -57,12 +57,14 @@ func (s *snapshotter) run(ctx context.Context, cursor PK, startChunkID int) erro
 
 		for _, row := range rows {
 			s.merger.onSnapshotEvent(CDCEvent{
-				Schema:    s.schema,
-				Table:     s.tableName,
-				Operation: OperationRead,
-				PK:        row.PK(),
-				After:     row,
-				chunkID:   chunkID,
+				Schema:      s.schema,
+				Table:       s.tableName,
+				Operation:   OperationRead,
+				PK:          row.PK(),
+				After:       row,
+				chunkID:     chunkID,
+				chunkSize:   len(rows),
+				chunkHighPK: actualHigh,
 			})
 		}
 

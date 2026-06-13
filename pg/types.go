@@ -30,9 +30,11 @@ type CDCEvent struct {
 	// After holds the new row state for INSERT, UPDATE, and READ. Nil for DELETE.
 	After Row
 
-	commitXID uint32
-	commitLSN uint64
-	chunkID   int
+	commitXID    uint32
+	commitLSN    uint64
+	chunkID      int
+	chunkSize    int // total events in this chunk (READ events only)
+	chunkHighPK  PK  // highest PK in this chunk (READ events only)
 }
 
 type Phase string

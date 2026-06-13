@@ -122,5 +122,5 @@ connector := pg.New(pg.Config{
 | `Publication` | `string` | — | Publication name (created if absent) |
 | `Tables` | `[]string` | — | Schema-qualified table names to capture |
 | `ChunkSize` | `int` | `1000` | Rows per snapshot chunk |
-| `BufferSize` | `int` | `10000` | Internal event buffer capacity |
+| `BufferSize` | `int` | `1000` | Internal event buffer capacity |
 | `OffsetStore` | `OffsetStore` | Postgres | Where to persist CDC offsets |

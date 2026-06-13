@@ -42,7 +42,7 @@ func (c *Config) chunkSizeOrDefault() int {
 
 func (c *Config) bufferSizeOrDefault() int {
 	if c.BufferSize <= 0 {
-		return 10000
+		return 1000
 	}
 	return c.BufferSize
 }
@@ -69,6 +69,8 @@ type cdcEngine struct {
 
 	// broadcast when both pendingChunks and completedChunks become empty
 	allChunksAcked *sync.Cond
+
+	snapshotScanDone bool // set to true when all tables have been fully scanned
 
 	done chan struct{} // closed when the WAL streamer exits and the replication connection is released
 }
@@ -146,8 +148,8 @@ func (c *PostgresConnector) HandleDemand(
 					table = event.Schema + "." + event.Table
 				}
 				e.mu.Lock()
-				e.chunkSizes[event.chunkID]++
-				e.chunkHighPK[event.chunkID] = event.PK
+				e.chunkSizes[event.chunkID] = event.chunkSize
+				e.chunkHighPK[event.chunkID] = event.chunkHighPK
 				e.chunkTable[event.chunkID] = table
 				e.pendingChunks[event.chunkID] = struct{}{}
 
@@ -214,6 +216,11 @@ func (c *PostgresConnector) Acknowledger() broadway.Acknowledger {
 		}
 		if advanced {
 			e.advanceSnapshotCursor()
+		}
+
+		if e.snapshotScanDone && e.state.Phase == PhaseSnapshotting &&
+			len(e.pendingChunks) == 0 && len(e.completedChunks) == 0 {
+			e.state.Phase = PhaseStreaming
 		}
 
 		if e.offsetStore != nil {
@@ -409,6 +416,13 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		chunkID += c.config.chunkSizeOrDefault() // rough offset to keep chunk IDs unique across tables
 	}
 
+	// Signal that all tables have been scanned. The Acknowledger checks this flag
+	// alongside the pending-chunk counts to transition Phase to PhaseStreaming and
+	// persist it — keeping state persistence solely in the Acknowledger.
+	e.mu.Lock()
+	e.snapshotScanDone = true
+	e.mu.Unlock()
+
 	// Block until every emitted snapshot chunk has been acknowledged. This ensures that
 	// PhaseStreaming is never persisted before all snapshot rows are safely processed:
 	// a restart would skip the snapshot, so pre-existing rows not in WAL would be lost.
@@ -426,10 +440,6 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 	}
 
 	e.merger.onSnapshotComplete()
-
-	e.mu.Lock()
-	e.state.Phase = PhaseStreaming
-	e.mu.Unlock()
 }
 
 // ensurePublication creates the publication if it does not exist, or alters it
