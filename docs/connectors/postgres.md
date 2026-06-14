@@ -8,7 +8,7 @@
 wal_level = logical
 ```
 
-The connector creates the replication slot and publication automatically on first run. All captured tables must have a single-column primary key named `id`. Both `bigint`/`bigserial` and `uuid` column types are supported.
+The connector creates the replication slot and publication automatically on first run. All captured tables must have a single-column primary key (`bigint`/`bigserial` or `uuid`). The primary key column defaults to `id` and can be overridden per table via `CDCTable.PKColumn`.
 
 ## How it works
 
@@ -120,7 +120,7 @@ connector := pg.New(pg.Config{
 | `ConnectionString` | `string` | — | Postgres connection string |
 | `SlotName` | `string` | — | Replication slot name (created if absent) |
 | `Publication` | `string` | — | Publication name (created if absent) |
-| `Tables` | `[]string` | — | Schema-qualified table names to capture |
+| `Tables` | `[]CDCTable` | — | Tables to capture; each entry sets `Name` (schema-qualified) and optionally `PKColumn` (default `"id"`) |
 | `ChunkSize` | `int` | `1000` | Rows per snapshot chunk |
 | `BufferSize` | `int` | `1000` | Internal event buffer capacity |
 | `OffsetStore` | `OffsetStore` | Postgres | Where to persist CDC offsets |

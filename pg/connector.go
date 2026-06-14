@@ -20,10 +20,9 @@ type Config struct {
 	SlotName string
 	// Publication is the Postgres publication name. Created automatically on first run.
 	Publication string
-	// Tables is a list of schema-qualified table names to capture, e.g. "public.orders".
-	// Tables are snapshotted sequentially in the order listed.
-	// All captured tables must have a single-column primary key named "id" (bigint or uuid).
-	Tables []string
+	// Tables is the list of tables to capture. Tables are snapshotted sequentially in the order listed.
+	// Each entry comprises a schema-qualified table and its primary key column (default "id").
+	Tables []CDCTable
 	// ChunkSize is the number of rows per snapshot chunk (default: 1000).
 	ChunkSize int
 	// BufferSize is the internal event buffer capacity between the connector and the pipeline (default: 1000).
@@ -379,7 +378,7 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 
 	startIdx := 0
 	for i, t := range tables {
-		if t == state.CurrentSnapshotTable {
+		if t.Name == state.CurrentSnapshotTable {
 			startIdx = i
 			break
 		}
@@ -393,8 +392,8 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		table := tables[i]
 
 		e.mu.Lock()
-		if e.state.CurrentSnapshotTable != table {
-			e.state.CurrentSnapshotTable = table
+		if e.state.CurrentSnapshotTable != table.Name {
+			e.state.CurrentSnapshotTable = table.Name
 			e.state.SnapshotCursor = PK{}
 		}
 		e.mu.Unlock()
@@ -405,7 +404,13 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 			cursor = state.SnapshotCursor
 		}
 
-		snapshotter := newSnapshotter(conn, table, c.config.chunkSizeOrDefault(), e.merger)
+		snapshotter := newSnapshotter(
+			conn,
+			table.Name,
+			table.pkColumn(),
+			c.config.chunkSizeOrDefault(),
+			e.merger,
+		)
 		if err := snapshotter.run(ctx, cursor, chunkID); err != nil {
 			if ctx.Err() == nil {
 				fmt.Printf("snapshot error for %s: %v\n", table, err)
@@ -455,7 +460,9 @@ func (c *PostgresConnector) ensurePublication(ctx context.Context, conn *pgx.Con
 	}
 
 	tables := make([]string, len(c.config.Tables))
-	copy(tables, c.config.Tables)
+	for i, t := range c.config.Tables {
+		tables[i] = t.Name
+	}
 
 	if exists {
 		_, err := conn.Exec(ctx, fmt.Sprintf(

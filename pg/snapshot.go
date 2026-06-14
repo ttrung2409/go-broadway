@@ -8,24 +8,26 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// snapshotter scans a single table in ascending id order, chunk by chunk,
+// snapshotter scans a single table in ascending pk order, chunk by chunk,
 // emitting READ events through the merger.
 type snapshotter struct {
 	conn      *pgx.Conn
 	table     string // schema-qualified, e.g. "public.orders"
 	schema    string // extracted schema name
 	tableName string // extracted bare table name
+	pkCol     string // primary key column name
 	chunkSize int
 	merger    *merger
 }
 
-func newSnapshotter(conn *pgx.Conn, table string, chunkSize int, m *merger) *snapshotter {
+func newSnapshotter(conn *pgx.Conn, table, pkCol string, chunkSize int, m *merger) *snapshotter {
 	schema, tableName := splitQualifiedTable(table)
 	return &snapshotter{
 		conn:      conn,
 		table:     table,
 		schema:    schema,
 		tableName: tableName,
+		pkCol:     pkCol,
 		chunkSize: chunkSize,
 		merger:    m,
 	}
@@ -60,7 +62,7 @@ func (s *snapshotter) run(ctx context.Context, cursor PK, startChunkID int) erro
 				Schema:      s.schema,
 				Table:       s.tableName,
 				Operation:   OperationRead,
-				PK:          row.PK(),
+				PK:          pkFromValue(row[s.pkCol]),
 				After:       row,
 				chunkID:     chunkID,
 				chunkSize:   len(rows),
@@ -127,7 +129,7 @@ func (s *snapshotter) readChunk(ctx context.Context, cursor PK) (
 	}
 
 	if len(rows) > 0 {
-		high = rows[len(rows)-1].PK()
+		high = pkFromValue(rows[len(rows)-1][s.pkCol])
 	}
 	return rows, xmin, high, nil
 }
@@ -136,13 +138,14 @@ func (s *snapshotter) buildChunkQuery(cursor PK) (string, []any) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(`SELECT * FROM %s`, s.table))
 
+	quotedPK := pgQuoteIdent(s.pkCol)
 	var args []any
 	if cursor.IsSet() {
 		args = []any{cursor.Value()}
-		sb.WriteString(` WHERE id > $1`)
+		sb.WriteString(fmt.Sprintf(` WHERE %s > $1`, quotedPK))
 	}
 
-	sb.WriteString(fmt.Sprintf(` ORDER BY id LIMIT %d`, s.chunkSize))
+	sb.WriteString(fmt.Sprintf(` ORDER BY %s LIMIT %d`, quotedPK, s.chunkSize))
 	return sb.String(), args
 }
 

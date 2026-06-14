@@ -285,7 +285,10 @@ connector := pg.New(pg.Config{
     ConnectionString: "postgres://user:pass@host/db",
     SlotName:         "broadway_cdc",
     Publication:      "broadway_pub",
-    Tables:           []string{"public.orders", "public.users"},
+    Tables: []pg.CDCTable{
+        {Name: "public.orders"},
+        {Name: "public.users", PKColumn: "user_id"},
+    },
 })
 
 pipeline := broadway.NewPipeline(broadway.PipelineConfig{

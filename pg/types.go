@@ -1,5 +1,20 @@
 package pg
 
+// CDCTable describes a table to capture and its primary key column.
+type CDCTable struct {
+	// Name is the schema-qualified table name, e.g. "public.orders".
+	Name string `json:"name"`
+	// PKColumn is the primary key column name. Defaults to "id" if empty.
+	PKColumn string `json:"pk_column,omitempty"`
+}
+
+func (t CDCTable) pkColumn() string {
+	if t.PKColumn != "" {
+		return t.PKColumn
+	}
+	return "id"
+}
+
 type OperationType string
 
 const (
@@ -10,8 +25,6 @@ const (
 )
 
 type Row map[string]any
-
-func (r Row) PK() PK { return pkFromValue(r["id"]) }
 
 // CDCEvent is the payload of every message produced by PostgresConnector.
 // It represents a single row-level change captured from the WAL or snapshot.
@@ -30,11 +43,11 @@ type CDCEvent struct {
 	// After holds the new row state for INSERT, UPDATE, and READ. Nil for DELETE.
 	After Row
 
-	commitXID    uint32
-	commitLSN    uint64
-	chunkID      int
-	chunkSize    int // total events in this chunk (READ events only)
-	chunkHighPK  PK  // highest PK in this chunk (READ events only)
+	commitXID   uint32
+	commitLSN   uint64
+	chunkID     int
+	chunkSize   int // total events in this chunk (READ events only)
+	chunkHighPK PK  // highest PK in this chunk (READ events only)
 }
 
 type Phase string
@@ -45,13 +58,13 @@ const (
 )
 
 type CDCState struct {
-	Phase                 Phase     `json:"phase"`
-	SlotName              string    `json:"slot_name"`
-	ConfirmedLSN          uint64    `json:"confirmed_lsn"`
-	SnapshotTables        []string  `json:"snapshot_tables,omitempty"`
-	CurrentSnapshotTable  string    `json:"current_snapshot_table"`
-	SnapshotCursor        PK        `json:"snapshot_cursor,omitempty"`
-	ScannedPKRanges       []PKRange `json:"scanned_pk_ranges,omitempty"`
+	Phase                Phase      `json:"phase"`
+	SlotName             string     `json:"slot_name"`
+	ConfirmedLSN         uint64     `json:"confirmed_lsn"`
+	SnapshotTables       []CDCTable `json:"snapshot_tables,omitempty"`
+	CurrentSnapshotTable string     `json:"current_snapshot_table"`
+	SnapshotCursor       PK         `json:"snapshot_cursor,omitempty"`
+	ScannedPKRanges      []PKRange  `json:"scanned_pk_ranges,omitempty"`
 }
 
 type PKRange struct {
