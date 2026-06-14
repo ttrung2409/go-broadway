@@ -2,6 +2,21 @@
 
 A concurrent and multi-stage data ingestion and processing framework for Go applications, inspired by the Broadway library from Elixir. go-broadway simplifies building concurrent, resilient data processing pipelines with built-in support for batching, partitioning, and fault tolerance.
 
+- [Features](#features)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage Examples](#usage-examples)
+- [Advanced Topics](#advanced-topics)
+- [Configuration Options](#configuration-options)
+- [Connectors](#connectors)
+- [Usage Considerations](#usage-considerations)
+- [Caveats](#caveats)
+- [Real-World Example](#real-world-example)
+- [Testing](#testing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 ## Features
 
 - **Back-pressure** - The pipeline only requests the amount of messages necessary from producers, never flooding the system
@@ -300,7 +315,9 @@ pipeline := broadway.NewPipeline(broadway.PipelineConfig{
 
 ## Caveats
 
-go-broadway is designed for lightweight ETL pipelines. If you need to stream changes out of a single data source, particularly Postgres, and process them through a pipeline without pulling in a heavy infrastructure dependency, this library gives you that in pure Go. Consider a dedicated message broker instead if any of the following caveats apply.
+go-broadway is designed for lightweight ETL pipelines. If you need to stream changes out of a single data source, particularly Postgres, and process them through a pipeline without pulling in a heavy infrastructure dependency, this library gives you that in pure Go. 
+
+Consider a dedicated message broker instead if any of the following caveats apply.
 
 ### Heterogeneous Sources & Targets
 
