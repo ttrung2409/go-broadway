@@ -298,6 +298,18 @@ pipeline := broadway.NewPipeline(broadway.PipelineConfig{
 - **Partition Keys**: Choose keys that distribute load evenly
 - **Error Handling**: Implement custom acknowledgers for special failure cases
 
+## Caveats
+
+go-broadway is designed for lightweight ETL pipelines. If you need to stream changes out of a single data source, particularly Postgres, and process them through a pipeline without pulling in a heavy infrastructure dependency, this library gives you that in pure Go. Consider a dedicated message broker instead if any of the following caveats apply.
+
+### Heterogeneous Sources & Targets
+
+If your workload involves multiple heterogeneous sources and/or targets, you may want an interface sitting in between to decouple sources and targets, so both of them can scale independently: adding a new source does not require implementation for every target, and vice versa.
+
+### Durability
+
+If your use case requires durable queuing, for example to replay historical changes for debugging, backfill, or onboarding late consumers without re-snapshotting from the source.
+
 ## Real-World Example
 
 Check out the [examples](./examples) directory for a complete example of processing user activity events:
