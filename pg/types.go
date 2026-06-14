@@ -45,12 +45,13 @@ const (
 )
 
 type CDCState struct {
-	Phase           Phase     `json:"phase"`
-	SlotName        string    `json:"slot_name"`
-	ConfirmedLSN    uint64    `json:"confirmed_lsn"`
-	SnapshotTable   string    `json:"snapshot_table"`
-	SnapshotCursor  PK        `json:"snapshot_cursor,omitempty"`
-	ScannedPKRanges []PKRange `json:"scanned_pk_ranges,omitempty"`
+	Phase                 Phase     `json:"phase"`
+	SlotName              string    `json:"slot_name"`
+	ConfirmedLSN          uint64    `json:"confirmed_lsn"`
+	SnapshotTables        []string  `json:"snapshot_tables,omitempty"`
+	CurrentSnapshotTable  string    `json:"current_snapshot_table"`
+	SnapshotCursor        PK        `json:"snapshot_cursor,omitempty"`
+	ScannedPKRanges       []PKRange `json:"scanned_pk_ranges,omitempty"`
 }
 
 type PKRange struct {

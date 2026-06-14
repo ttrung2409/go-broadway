@@ -290,8 +290,9 @@ func (c *PostgresConnector) start(ctx context.Context) {
 	}
 	if !found {
 		state = CDCState{
-			Phase:    PhaseSnapshotting,
-			SlotName: c.config.SlotName,
+			Phase:          PhaseSnapshotting,
+			SlotName:       c.config.SlotName,
+			SnapshotTables: c.config.Tables,
 		}
 	}
 
@@ -373,12 +374,12 @@ func (c *PostgresConnector) start(ctx context.Context) {
 // drives the scanner and signals the merger.
 func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, state CDCState) {
 	e := c.engine
-	tables := c.config.Tables
+	tables := state.SnapshotTables
 	chunkID := 1
 
 	startIdx := 0
 	for i, t := range tables {
-		if t == state.SnapshotTable {
+		if t == state.CurrentSnapshotTable {
 			startIdx = i
 			break
 		}
@@ -392,8 +393,8 @@ func (c *PostgresConnector) runSnapshot(ctx context.Context, conn *pgx.Conn, sta
 		table := tables[i]
 
 		e.mu.Lock()
-		if e.state.SnapshotTable != table {
-			e.state.SnapshotTable = table
+		if e.state.CurrentSnapshotTable != table {
+			e.state.CurrentSnapshotTable = table
 			e.state.SnapshotCursor = PK{}
 		}
 		e.mu.Unlock()
